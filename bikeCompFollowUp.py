@@ -1,7 +1,7 @@
 from turtle import right
 import toga
 from toga.style import Pack
-from toga.style.pack import CENTER, COLUMN, ROW, RIGHT, END
+from toga.style.pack import CENTER, COLUMN, ROW, LEFT, RIGHT, END
 from toga.colors import rgb
 
 import sqlite3
@@ -122,7 +122,7 @@ class HolaMundoApp(toga.App):
         main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
 
         contenido_box = toga.Box(
-            style=Pack(direction=COLUMN, align_items=CENTER)
+            style=Pack(direction=COLUMN, padding_left=40, align_items='start')
         )
 
         self.label_pantalla_dos = toga.Label(
