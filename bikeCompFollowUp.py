@@ -21,10 +21,14 @@ class HolaMundoApp(toga.App):
 
         logging.info('Creación Base de Datos y Tablas principales.')
         try:
-           cursor.execute("""CREATE TABLE datos (id integer PRIMARY KEY, fecha Date, datos text NOT NULL, km integer NOT NULL, activo BOOLEAN NOT NULL)""")
-           cursor.execute("""CREATE TABLE estadisticas (id interger PRIMARY KEY, jugador text NOT NULL, partida integer, disparos integer, nivelmax integer NOT NULL, enemigosmuertos integer, vidasusadas integer)""")
-           self.sqliteConnection.commit()
-           logging.info('Ejecución SQL creación tablas.')
+            res = cursor.execute("""select * FROM datos""")
+            if res.fetchone() != None:
+                cursor.execute("""CREATE TABLE datos (id integer PRIMARY KEY, fecha Date, datos text NOT NULL, km integer NOT NULL, activo BOOLEAN NOT NULL)""")
+                cursor.execute("""CREATE TABLE estadisticas (id interger PRIMARY KEY, jugador text NOT NULL, partida integer, disparos integer, nivelmax integer NOT NULL, enemigosmuertos integer, vidasusadas integer)""")
+                self.sqliteConnection.commit()
+                logging.info('Ejecución SQL creación tablas.')
+
+            logging.info('Ejecución SQL creación tablas.')
         except sqlite3.Error as error:
             logging.error("Error al crear Tablas en SQLite", error)
             logging.error("Tablas ya existen en SQLite")
