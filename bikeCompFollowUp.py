@@ -6,9 +6,11 @@ from toga.colors import rgb
 
 import sqlite3
 import logging
+from datetime import date
 
 class HolaMundoApp(toga.App):
     sqliteConnection = 0
+    index_entrada = 0
 
     def open_document(self, file):
         # Ignorar cualquier documento que intente abrir la app
@@ -167,6 +169,19 @@ class HolaMundoApp(toga.App):
             style=Pack(width=250)
         )
 
+        # Caja con label "DEscripción" a la izquierda y campo de texto a la derecha
+        caja_descripcion = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
+
+        label_descripcion = toga.Label(
+            "Descripción: ",
+            style=Pack(margin_right=10)
+        )
+
+        self.descripcion_texto = toga.TextInput(
+            placeholder="Escribe algo...",
+            style=Pack(width=250)
+        )
+
         # Caja con dropdown "Tipo vehículo"
         caja_tipo_vehiculo = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
         
@@ -204,11 +219,15 @@ class HolaMundoApp(toga.App):
 
         self.entrada_fecha = toga.TextInput(
             placeholder="Fecha instalación",
-            style=Pack(width=250)
+            style=Pack(width=250),
+            value=date.today().strftime("%Y-%m-%d")
         )
 
         caja_nombre.add(label_nombre)
         caja_nombre.add(self.entrada_texto)
+
+        caja_descripcion.add(label_descripcion)
+        caja_descripcion.add(self.descripcion_texto)
 
         caja_tipo_vehiculo.add(label_tipo_vehiculo)
         caja_tipo_vehiculo.add(self.selection_tipo_vehiculo)
@@ -221,12 +240,13 @@ class HolaMundoApp(toga.App):
 
         boton_mostrar_texto = toga.Button(
             "Cargar",
-            on_press=self.mostrar_texto_segunda,
+            on_press=self.cargar_entrada,
             style=Pack(margin=10)
         )
 
         contenido_box.add(self.label_pantalla_dos)
         contenido_box.add(caja_nombre)
+        contenido_box.add(caja_descripcion)
         contenido_box.add(caja_tipo_vehiculo)
         contenido_box.add(caja_elemento)
         contenido_box.add(caja_fecha)
@@ -257,6 +277,32 @@ class HolaMundoApp(toga.App):
         texto = (self.entrada_texto.value or "").strip()
         self.label_pantalla_dos.text = texto if texto else "No has escrito nada"
 
+    def cargar_entrada(self, widget):
+        texto1 = (self.entrada_texto.value or "").strip()
+        texto2 = (self.descripcion_texto.value or "").strip()
+        tipov = (self.selection_tipo_vehiculo.value or "").strip()
+        elemento = (self.selection_elemento.value or "").strip()
+        f = (self.entrada_fecha.value or "").strip() or date.today().strftime("%Y-%m-%d")
+
+        usuario = ""  # Ajusta si tienes campo de usuario en el formulario
+
+        try:
+            cursor = self.sqliteConnection.cursor()
+            cursor.execute(
+                "INSERT INTO Entradas (fecha, nombre, usuario, tipov, descripcion) VALUES (?, ?, ?, ?, ?)",
+                (f, texto1, usuario, tipov, texto2)
+            )
+            self.sqliteConnection.commit()
+        except sqlite3.Error as error:
+            
+            logging.error("Error al insertar en Entradas: %s", error)
+        finally:
+            self.label_pantalla_dos.text = "Entrada cargada correctamente."
+            self.label_pantalla_dos.style.color = rgb(0, 255, 0)
+            logging.info("Datos de Entrada cargados correctamente.")
+            
+
+
     def volver_pantalla_inicial(self, widget):
         self.main_window.content = self.construir_pantalla_inicial()
 
@@ -274,7 +320,7 @@ def main():
     logging.warning("Inicio pyiOS!!!")
 
     # Nombre visible y ID de la app (ajústalo a tu dominio)
-    return HolaMundoApp("MiAppPy", "org.ejemplo.holamundo", icon="resources/icon.png")
+    return HolaMundoApp("Bike Comp Follow App", "org.ejemplo.holamundo", icon="resources/icon.png")
 
 if __name__ == "__main__":
     app = main()
