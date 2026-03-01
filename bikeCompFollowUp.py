@@ -4,6 +4,7 @@ from toga.style import Pack
 from toga.style.pack import CENTER, COLUMN, ROW, LEFT, RIGHT, END
 from toga.colors import rgb
 
+import sys
 import sqlite3
 import logging
 from datetime import date
@@ -223,6 +224,13 @@ class HolaMundoApp(toga.App):
             value=date.today().strftime("%Y-%m-%d")
         )
 
+        # Orden de tabulación (Tab) entre campos
+        self.entrada_texto.tab_index = 0
+        self.descripcion_texto.tab_index = 1
+        self.selection_tipo_vehiculo.tab_index = 2
+        self.selection_elemento.tab_index = 3
+        self.entrada_fecha.tab_index = 4
+
         caja_nombre.add(label_nombre)
         caja_nombre.add(self.entrada_texto)
 
@@ -243,6 +251,7 @@ class HolaMundoApp(toga.App):
             on_press=self.cargar_entrada,
             style=Pack(margin=10)
         )
+        boton_mostrar_texto.tab_index = 5
 
         contenido_box.add(self.label_pantalla_dos)
         contenido_box.add(caja_nombre)
@@ -264,8 +273,23 @@ class HolaMundoApp(toga.App):
             on_press=self.volver_pantalla_inicial,
             style=Pack(margin=10)
         )
+        boton_volver.tab_index = 6
 
         barra_inferior.add(boton_volver)
+
+        # En macOS (Cocoa) tab_index no está implementado; enlazar cadena de foco a mano
+        if sys.platform == "darwin":
+            try:
+                n = lambda w: w._impl.native
+                n(self.entrada_texto).nextKeyView = n(self.descripcion_texto)
+                n(self.descripcion_texto).nextKeyView = n(self.selection_tipo_vehiculo)
+                n(self.selection_tipo_vehiculo).nextKeyView = n(self.selection_elemento)
+                n(self.selection_elemento).nextKeyView = n(self.entrada_fecha)
+                n(self.entrada_fecha).nextKeyView = n(boton_mostrar_texto)
+                n(boton_mostrar_texto).nextKeyView = n(boton_volver)
+                n(boton_volver).nextKeyView = n(self.entrada_texto)
+            except Exception as e:
+                logging.debug("No se pudo configurar cadena Tab en Cocoa: %s", e)
 
         main_box.add(contenido_box)
         main_box.add(espaciador)
@@ -300,7 +324,7 @@ class HolaMundoApp(toga.App):
             self.label_pantalla_dos.text = "Entrada cargada correctamente."
             self.label_pantalla_dos.style.color = rgb(0, 255, 0)
             logging.info("Datos de Entrada cargados correctamente.")
-            
+
 
 
     def volver_pantalla_inicial(self, widget):
