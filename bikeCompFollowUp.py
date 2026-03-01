@@ -1,3 +1,4 @@
+import string
 from turtle import right
 import toga
 from toga.style import Pack
@@ -72,24 +73,36 @@ class HolaMundoApp(toga.App):
         main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
 
         contenido_box = toga.Box(
-            style=Pack(direction=COLUMN, align_items=CENTER)
+            style=Pack(direction=COLUMN, align_items=CENTER, gap=15)
         )
+
+        # Crear tabla de tipos de vehículo si no existe
+        cursor = self.sqliteConnection.cursor()
+        try:
+            cursor.execute("""SELECT nombre, usuario from ENTRADAS""")
+            filas = cursor.fetchall()   # lista de tuplas (nombre, tipov)
+        except sqlite3.Error as error:
+            logging.error("Error al crear/rellenar tabla tipo_vehiculo en SQLite %s", error)
 
         # Texto inicial encima del botón
         self.label = toga.Label(
-            "Pulsa el botón",
+            "Seleeciona el usuario",
             style=Pack(margin_bottom=20, text_align=CENTER)
         )
 
-        # Botón que cambia el texto (ahora circular con símbolo '+')
-        boton = toga.Button(
-            "+",
-            on_press=self.mostrar_hola_mundo,
-            style=Pack(margin=10, width=40, height=40, padding=0, align_items=END)
-        )
-
         contenido_box.add(self.label)
-        contenido_box.add(boton)
+
+        for nombre, usuario in filas:
+            print("Nombre:", nombre, "Usuario:", usuario) 
+            
+            cadena = usuario + " \n " + nombre # Concatener 2 string añadiendo un salto de línea.
+            # Botón que cambia el texto (ahora circular con símbolo '+')
+            boton = toga.Button(
+                cadena,
+            on_press=self.mostrar_hola_mundo,
+            style=Pack(width=140, height=60, padding=0))
+
+            contenido_box.add(boton)
 
         # Espaciador vertical para empujar la barra inferior hacia abajo
         espaciador_vertical = toga.Box(style=Pack(flex=1))
@@ -170,6 +183,19 @@ class HolaMundoApp(toga.App):
             style=Pack(width=250)
         )
 
+        # Caja con label "Usuario" a la izquierda y campo de texto a la derecha
+        caja_usuario = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
+
+        label_usuario = toga.Label(
+            "Usuario",
+            style=Pack(margin_right=10)
+        )
+
+        self.usuario_texto = toga.TextInput(
+            placeholder="Escribe algo...",
+            style=Pack(width=250)
+        )
+
         # Caja con label "DEscripción" a la izquierda y campo de texto a la derecha
         caja_descripcion = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
 
@@ -196,6 +222,7 @@ class HolaMundoApp(toga.App):
             items=tipos_vehiculo,
             style=Pack(width=250)
         )
+        
 
         # Caja con dropdown "Elemento"
         caja_elemento = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
@@ -226,13 +253,17 @@ class HolaMundoApp(toga.App):
 
         # Orden de tabulación (Tab) entre campos
         self.entrada_texto.tab_index = 0
-        self.descripcion_texto.tab_index = 1
-        self.selection_tipo_vehiculo.tab_index = 2
-        self.selection_elemento.tab_index = 3
-        self.entrada_fecha.tab_index = 4
+        self.usuario_texto.tab_index = 1
+        self.descripcion_texto.tab_index = 2
+        self.selection_tipo_vehiculo.tab_index = 3
+        self.selection_elemento.tab_index = 4
+        self.entrada_fecha.tab_index = 5
 
         caja_nombre.add(label_nombre)
         caja_nombre.add(self.entrada_texto)
+
+        caja_usuario.add(label_usuario)
+        caja_usuario.add(self.usuario_texto)
 
         caja_descripcion.add(label_descripcion)
         caja_descripcion.add(self.descripcion_texto)
@@ -255,6 +286,7 @@ class HolaMundoApp(toga.App):
 
         contenido_box.add(self.label_pantalla_dos)
         contenido_box.add(caja_nombre)
+        contenido_box.add(caja_usuario)
         contenido_box.add(caja_descripcion)
         contenido_box.add(caja_tipo_vehiculo)
         contenido_box.add(caja_elemento)
@@ -344,7 +376,7 @@ def main():
     logging.warning("Inicio pyiOS!!!")
 
     # Nombre visible y ID de la app (ajústalo a tu dominio)
-    return HolaMundoApp("Bike Comp Follow App", "org.ejemplo.holamundo", icon="resources/icon.png")
+    return HolaMundoApp("Bike Comp Follow App", "org.ejemplo.holamundo", icon="resources/bici2.png")
 
 if __name__ == "__main__":
     app = main()
