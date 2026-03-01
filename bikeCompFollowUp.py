@@ -107,9 +107,15 @@ class HolaMundoApp(toga.App):
         # Espaciador vertical para empujar la barra inferior hacia abajo
         espaciador_vertical = toga.Box(style=Pack(flex=1))
 
-        # Barra inferior con botón a la derecha
+        # Barra inferior: botón izquierda, hueco en medio, botón derecha
         barra_inferior = toga.Box(
-            style=Pack(margin_left=430, direction=COLUMN, horizontal_align_items=END)
+            style=Pack(direction=ROW)
+        )
+
+        boton_strava = toga.Button(
+            "Strava Sync",
+            on_press=self.ir_a_pantalla_dos,
+            style=Pack(margin=10)
         )
 
         boton_siguiente = toga.Button(
@@ -118,6 +124,10 @@ class HolaMundoApp(toga.App):
             style=Pack(margin=10)
         )
 
+        espaciador_horizontal = toga.Box(style=Pack(flex=1))
+
+        barra_inferior.add(boton_strava)
+        barra_inferior.add(espaciador_horizontal)
         barra_inferior.add(boton_siguiente)
 
         main_box.add(contenido_box)
