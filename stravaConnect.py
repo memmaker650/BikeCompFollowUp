@@ -16,17 +16,21 @@ with open("Resources/client_secrets.txt", "r", encoding="utf-8") as f:
 # Primera y segunda línea
 linea1 = lineas[0].strip()
 linea2 = lineas[1].strip()
+linea5 = lineas[4].strip()
 
 # Tomar el texto que hay después de los dos puntos
 # (split en el primer ':' y nos quedamos con la parte derecha)
 valor1 = linea1.split(":", 1)[1].strip()
 valor2 = linea2.split(":", 1)[1].strip()
+valor5 = linea5.split(":", 1)[1].strip()
 
 print("Valor 1:", valor1)
 print("Valor 2:", valor2)
+print("Valor 5:", valor5)
 
 client_id = valor1
 client_secret = valor2
+code = valor5
 
 # sys.exit()
 
@@ -48,25 +52,28 @@ url = client.authorization_url(
 )
 
 # Open the URL in a web browser
-#webbrowser.open(url)
+webbrowser.open(url)
 
-#print(
-#    """You will see a url that looks like this. """,
-#    """http://127.0.0.1:5000/authorization?state=&code=12323423423423423423423550&scope=read,activity:read_all,profile:read_all,read_all")""",
-#)
-#    """Copy the values between code= and & in the url that you see in the browser. """,
+print(
+    """You will see a url that looks like this. """,
+    """http://127.0.0.1:5000/authorization?state=&code=12323423423423423423423550&scope=read,activity:read_all,profile:read_all,read_all")""",
+    """Copy the values between code= and & in the url that you see in the browser. """,
+)
+#
+#    
 # Using input allows you to copy the code into your Python console
 # (or Jupyter Notebook)
-#code = input("Please enter the code that you received: ")
-#print(
-#    f"Great! Your code is {code}\n"
-#    "Next, I will exchange that code for a token.\n"
-#    "I only have to do this once."
-#)
+code = input("Please enter the code that you received: ")
+print(
+    f"Great! Your code is {code}\n"
+    "Next, I will exchange that code for a token.\n"
+    "I only have to do this once."
+)
+
 
 # Exchange the code returned from Strava for an access token
 token_response = client.exchange_code_for_token(
-    client_id=client_id, client_secret=client_secret, code="998f7131c185976250ab65bda1e5bafdc2c96c3f"
+    client_id=client_id, client_secret=client_secret, code=code
 )
 with open("Resources/token_response.json", "w", encoding="utf-8") as f:
     json.dump(token_response, f, ensure_ascii=False, indent=2)

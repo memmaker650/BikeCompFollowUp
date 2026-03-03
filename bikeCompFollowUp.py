@@ -99,7 +99,7 @@ class HolaMundoApp(toga.App):
             # Botón que cambia el texto (ahora circular con símbolo '+')
             boton = toga.Button(
                 cadena,
-            on_press=self.mostrar_hola_mundo,
+            on_press=self.ir_a_pantalla_tres,
             style=Pack(width=140, height=60, padding=0))
 
             contenido_box.add(boton)
@@ -378,6 +378,76 @@ class HolaMundoApp(toga.App):
         # Pantalla inicial al arrancar
         self.main_window.content = self.construir_pantalla_inicial()
         self.main_window.show()
+    
+    # -------- Pantalla 3 --------
+    def construir_pantalla_tres(self):
+        main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
+
+        contenido_box = toga.Box(
+            style=Pack(direction=COLUMN, padding_left=40, align_items='start')
+        )
+
+        self.label_pantalla_dos = toga.Label(
+            "Pantalla 3",
+            style=Pack(margin_bottom=20, text_align=CENTER)
+        )
+
+        contenido_box.add(self.label_pantalla_dos)
+
+        # Barra inferior con botón a la izquierda (por defecto)
+        barra_inferior = toga.Box(
+            style=Pack(direction=ROW)
+        )
+
+        boton_volver = toga.Button(
+            "◀ Volver",
+            on_press=self.volver_pantalla_inicial,
+            style=Pack(margin=10)
+        )
+        barra_inferior.add(boton_volver)
+
+        main_box.add(contenido_box)
+        main_box.add(barra_inferior)
+
+        return main_box
+
+    def ir_a_pantalla_tres(self, widget):
+        self.main_window.content = self.construir_pantalla_tres()
+
+    # -------- Pantalla 4 --------
+    def construir_pantalla_cuatro(self):
+        main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
+
+        contenido_box = toga.Box(
+            style=Pack(direction=COLUMN, padding_left=40, align_items='start')
+        )
+
+        self.label_pantalla_dos = toga.Label(
+            "Pantalla 4",
+            style=Pack(margin_bottom=20, text_align=CENTER)
+        )
+
+        contenido_box.add(self.label_pantalla_dos)
+
+        # Barra inferior con botón a la izquierda (por defecto)
+        barra_inferior = toga.Box(
+            style=Pack(direction=ROW)
+        )
+
+        boton_volver = toga.Button(
+            "◀ Volver",
+            on_press=self.volver_pantalla_inicial,
+            style=Pack(margin=10)
+        )
+        barra_inferior.add(boton_volver)
+
+        main_box.add(contenido_box)
+        main_box.add(barra_inferior)
+
+        return main_box
+
+    def ir_a_pantalla_cuatro(self, widget):
+        self.main_window.content = self.construir_pantalla_cuatro()
 
 
 def main():
