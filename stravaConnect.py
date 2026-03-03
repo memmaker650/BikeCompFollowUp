@@ -2,6 +2,7 @@
 import webbrowser
 import json
 import sys
+import math
 from datetime import datetime
 
 from stravalib.client import Client
@@ -47,26 +48,38 @@ url = client.authorization_url(
 )
 
 # Open the URL in a web browser
-webbrowser.open(url)
+#webbrowser.open(url)
 
-print(
-    """You will see a url that looks like this. """,
-    """http://127.0.0.1:5000/authorization?state=&code=12323423423423423423423550&scope=read,activity:read_all,profile:read_all,read_all")""",
-    """Copy the values between code= and & in the url that you see in the browser. """,
-)
+#print(
+#    """You will see a url that looks like this. """,
+#    """http://127.0.0.1:5000/authorization?state=&code=12323423423423423423423550&scope=read,activity:read_all,profile:read_all,read_all")""",
+#)
+#    """Copy the values between code= and & in the url that you see in the browser. """,
 # Using input allows you to copy the code into your Python console
 # (or Jupyter Notebook)
-code = input("Please enter the code that you received: ")
-print(
-    f"Great! Your code is {code}\n"
-    "Next, I will exchange that code for a token.\n"
-    "I only have to do this once."
-)
+#code = input("Please enter the code that you received: ")
+#print(
+#    f"Great! Your code is {code}\n"
+#    "Next, I will exchange that code for a token.\n"
+#    "I only have to do this once."
+#)
 
 # Exchange the code returned from Strava for an access token
 token_response = client.exchange_code_for_token(
-    client_id=client_id, client_secret=client_secret, code=code
+    client_id=client_id, client_secret=client_secret, code="998f7131c185976250ab65bda1e5bafdc2c96c3f"
 )
+with open("Resources/token_response.json", "w", encoding="utf-8") as f:
+    json.dump(token_response, f, ensure_ascii=False, indent=2)
+
+# Save the token response as a JSON file
+with open("Resources/token_response.json", "w") as f:
+    json.dump(token_response, f)
+
+print("Token saved - hooray!")
+
+# Access and refresh tokens
+access_token = token_response["access_token"]
+refresh_token = token_response["refresh_token"]  # Use this after 6 hours
 
 print(f"Token Response -->  {token_response}" )
 # Example output of token_response
@@ -107,7 +120,7 @@ for actividad2 in client.get_activities(before=fecha_hoy):
         total_desnivel2 += actividad2.total_elevation_gain
         contador2 += 1
 
-print("Actividades:", contador2-contador)
-print("Distancia (km):", (total_distancia2-total_distancia)  / 1000)
-print("Tiempo (horas):", (total_tiempo2-total_tiempo) / 3600)
-print("Desnivel (m):", (total_desnivel2-total_desnivel))
+print("Actividades:", math.trunc(contador2-contador))
+print("Distancia (km):", math.trunc((total_distancia2-total_distancia)  / 1000))
+print("Tiempo (horas):", math.trunc((total_tiempo2-total_tiempo) / 3600))
+print("Desnivel (m):", math.trunc((total_desnivel2-total_desnivel)))
