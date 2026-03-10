@@ -3,7 +3,11 @@ import webbrowser
 import json
 import sys
 import math
+
 from datetime import datetime
+
+import sqlite3
+import logging
 
 from stravalib.client import Client
 
@@ -127,7 +131,27 @@ for actividad2 in client.get_activities(before=fecha_hoy):
         total_desnivel2 += actividad2.total_elevation_gain
         contador2 += 1
 
+total_actividades = math.trunc(contador2-contador)        
+
 print("Actividades:", math.trunc(contador2-contador))
 print("Distancia (km):", math.trunc((total_distancia2-total_distancia)  / 1000))
 print("Tiempo (horas):", math.trunc((total_tiempo2-total_tiempo) / 3600))
 print("Desnivel (m):", math.trunc((total_desnivel2-total_desnivel)))
+
+
+# Meter los datos extraídos en base de datos.
+sqliteConnection = sqlite3.connect("./DB/dbbcfu.db")
+cursor = sqliteConnection.cursor()
+logging.info("Successfully Connected to SQLite")
+
+try:
+    cursor = sqliteConnection.cursor()
+    cursor.execute("INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas) VALUES (?, ?, ?, ?, ?, ?)", (fecha_hoy, math.trunc((total_distancia2-total_distancia)  / 1000), 
+    math.trunc((total_desnivel2-total_desnivel)), "bike", total_actividades, math.trunc((total_tiempo2-total_tiempo) / 3600))            )
+except sqlite3.Error as error: 
+    print("Error al insertar en Entradas: %s", error)
+    logging.error("Error al insertar en Entradas: %s", error)
+finally:
+    print("Datos cargados correctamente en BDD.")
+    logging.info("Datos de Entrada cargados correctamente.")
+    sqliteConnection.commit()
