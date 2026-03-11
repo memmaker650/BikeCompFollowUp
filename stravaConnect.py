@@ -13,14 +13,21 @@ import logging
 from stravalib.client import Client
 
 class StravaData:
-    contador, contador2 = 0
-    client_id, client_secret, code = ""
+    contador = 0
+    contador2 = 0
+    client_id = ""
+    client_secret = "" 
+    code = ""
     client = ""
-    total_distancia, total_distancia2 = 0
-    total_desnivel, total_desnivel2 = 0
-    total_tiempo, total_tiempo2 = 0
+    total_distancia = 0 
+    total_distancia2 = 0
+    total_desnivel = 0 
+    total_desnivel2 = 0
+    total_tiempo = 0 
+    total_tiempo2 = 0
     total_actividades = 0
-    fecha_hoy, fecha_objetivo = datetime
+    fecha_referencia = datetime 
+    fecha_objetivo = datetime
 
     # Constructor: inicializa atributos (características)
     def __init__(self):
@@ -171,6 +178,8 @@ class StravaData:
     def extraerDatos(self, fecha1, fecha2, tipoActividad="Ride"):
         self.fecha_referencia = fecha1
         self.fecha_objetivo = fecha2
+        print("Fecha Referencia: ", self.fecha_referencia)
+        print("Fecha Objetivo: ", self.fecha_objetivo)
         #client = Client(access_token=code)
 
         total_distancia = 0
@@ -188,6 +197,8 @@ class StravaData:
                 total_tiempo += actividad.moving_time
                 total_desnivel += actividad.total_elevation_gain
                 contador += 1
+        
+        print("Parte 1 FIN")
 
         for actividad2 in self.client.get_activities(before=self.fecha_objetivo):
             if actividad2.type == tipoActividad:
@@ -195,6 +206,8 @@ class StravaData:
                 total_tiempo2 += actividad2.moving_time
                 total_desnivel2 += actividad2.total_elevation_gain
                 contador2 += 1
+
+        print("Parte 2 end")
 
         self.total_actividades = math.trunc(contador2-contador)
 
@@ -214,8 +227,17 @@ class StravaData:
             cursor = sqliteConnection.cursor()
             cursor.execute("INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas) VALUES (?, ?, ?, ?, ?, ?)", (fecha, math.trunc((self.total_distancia2-self.total_distancia)  / 1000), 
                 math.trunc((self.total_desnivel2-self.total_desnivel)), "bike", self.total_actividades, math.trunc((self.total_tiempo2-self.total_tiempo) / 3600))            )
+            
+            sqliteConnection.commit()
+            
+            if cursor.rowcount > 0:
+                print("Registro insertado correctamente")
+                logging.info("Registro insertado correctamente")
+            else:
+                print("No se insertó ningún registro")
+                logging.warning("No se insertó ningún registro")
         except sqlite3.Error as error: 
             print("Error al insertar en Entradas: %s", error)
             logging.error("Error al insertar en Entradas: %s", error)
-        finally:
-            print("Datos cargados correctamente en BDD.")
+
+        print("Fin Guardado de datos.") 

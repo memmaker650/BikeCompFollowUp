@@ -1,3 +1,4 @@
+import datetime
 import string
 from turtle import right
 import toga
@@ -8,9 +9,9 @@ from toga.colors import rgb
 import sys
 import sqlite3
 import logging
-from datetime import date
+from datetime import datetime
 
-import time
+import stravaConnect
 import threading
 import asyncio
 
@@ -262,7 +263,7 @@ class HolaMundoApp(toga.App):
         self.entrada_fecha = toga.TextInput(
             placeholder="Fecha instalación",
             style=Pack(width=250),
-            value=date.today().strftime("%Y-%m-%d")
+            value=datetime.today().strftime("%Y-%m-%d")
         )
 
         # Orden de tabulación (Tab) entre campos
@@ -352,7 +353,7 @@ class HolaMundoApp(toga.App):
         texto2 = (self.descripcion_texto.value or "").strip()
         tipov = (self.selection_tipo_vehiculo.value or "").strip()
         elemento = (self.selection_elemento.value or "").strip()
-        f = (self.entrada_fecha.value or "").strip() or date.today().strftime("%Y-%m-%d")
+        f = (self.entrada_fecha.value or "").strip() or datetime.today().strftime("%Y-%m-%d")
 
         usuario = ""  # Ajusta si tienes campo de usuario en el formulario
 
@@ -462,10 +463,14 @@ class HolaMundoApp(toga.App):
             # Actualizar barra
             self.progress.value = i
             # actualizar texto
-            self.progress.value = i
             self.label.text = f"Procesando {i} de {self.total}"
     
-
+    def recolectarDatosStrava(self, widget):
+        datosStrava = stravaConnect.StravaData()
+        datosStrava.initConexion()
+        datosStrava.crearObjetoCliente()
+        datosStrava.extraerDatos(datetime(2025, 12, 31), datetime.now())
+        datosStrava.guardarDatosBDD(datetime.now())
 
     def barraProgresoCargaDatos(self, widget):    
 
@@ -482,16 +487,17 @@ class HolaMundoApp(toga.App):
             value=0, style=Pack(padding=10))
 
         # Botón para iniciar tarea
-        boton = toga.Button(
-            "Iniciar",
-            on_press=self.iniciar_tarea,
-            style=Pack(padding=10)
-        )
+        box = toga.Box(style=Pack(direction=COLUMN, padding=20))
 
-        box = toga.Box(
-            children=[self.label, self.progress, boton],
-            style=Pack(direction=COLUMN, padding=20)
-        )
+        # Añadimos los widgets al mismo box
+        box.add(self.label)
+        box.add(self.progress)
+
+        boton_iniciar = toga.Button("Iniciar", on_press=self.iniciar_tarea, style=Pack(padding=10))
+        box.add(boton_iniciar)
+
+        boton_datos = toga.Button("Extraer Datos Strava", on_press=self.recolectarDatosStrava, style=Pack(padding=10))
+        box.add(boton_datos)
 
         self.main_window = toga.MainWindow(title="Ejemplo ProgressBar")
         self.main_window.content = box
