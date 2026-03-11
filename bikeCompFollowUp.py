@@ -10,6 +10,10 @@ import sqlite3
 import logging
 from datetime import date
 
+import time
+import threading
+import asyncio
+
 class HolaMundoApp(toga.App):
     sqliteConnection = 0
     index_entrada = 0
@@ -86,7 +90,7 @@ class HolaMundoApp(toga.App):
 
         # Texto inicial encima del botón
         self.label = toga.Label(
-            "Seleeciona el usuario",
+            "Selecciona el usuario",
             style=Pack(margin_bottom=20, text_align=CENTER)
         )
 
@@ -99,7 +103,7 @@ class HolaMundoApp(toga.App):
             # Botón que cambia el texto (ahora circular con símbolo '+')
             boton = toga.Button(
                 cadena,
-            on_press=self.ir_a_pantalla_tres,
+            on_press=self.barraProgresoCargaDatos,
             style=Pack(width=140, height=60, padding=0))
 
             contenido_box.add(boton)
@@ -449,6 +453,49 @@ class HolaMundoApp(toga.App):
     def ir_a_pantalla_cuatro(self, widget):
         self.main_window.content = self.construir_pantalla_cuatro()
 
+    def iniciar_tarea(self, widget):
+        self.add_background_task(self.tarea_larga)
+
+    async def tarea_larga(self, widget):
+        for i in range(1, self.total + 1):
+            await asyncio.sleep(0.3)   
+            # Actualizar barra
+            self.progress.value = i
+            # actualizar texto
+            self.progress.value = i
+            self.label.text = f"Procesando {i} de {self.total}"
+    
+
+
+    def barraProgresoCargaDatos(self, widget):    
+
+        self.total = 20
+
+        # Texto de progreso
+        self.label = toga.Label(
+            "Pulsa Inicio para cargar los datos.",
+            style=Pack(padding=10)
+        )
+
+        # Barra de progreso
+        self.progress = toga.ProgressBar(max=self.total,
+            value=0, style=Pack(padding=10))
+
+        # Botón para iniciar tarea
+        boton = toga.Button(
+            "Iniciar",
+            on_press=self.iniciar_tarea,
+            style=Pack(padding=10)
+        )
+
+        box = toga.Box(
+            children=[self.label, self.progress, boton],
+            style=Pack(direction=COLUMN, padding=20)
+        )
+
+        self.main_window = toga.MainWindow(title="Ejemplo ProgressBar")
+        self.main_window.content = box
+        self.main_window.show()
 
 def main():
     logging.basicConfig(filename="./log/bikecfu.log", level=logging.DEBUG,

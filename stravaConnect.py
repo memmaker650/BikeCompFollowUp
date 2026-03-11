@@ -5,6 +5,7 @@ import sys
 import math
 
 from datetime import datetime
+from dateutil.relativedelta import relativedelta
 
 import sqlite3
 import logging
@@ -116,29 +117,80 @@ class StravaData:
 
         # You are now successfully authenticated!
 
-    def extraerDatos(self):
-        self.fecha_objetivo = datetime(2025, 12, 31)
-        self.fecha_hoy = datetime(2026, 3, 2)
+    def chequearDatosBDD(self, fecha) -> bool:
+        sqliteConnection = sqlite3.connect("./DB/dbbcfu.db")
+        cursor = sqliteConnection.cursor()
+        logging.info("Successfully Connected to SQLite")
+
+        try:
+            cursor = sqliteConnection.cursor()
+            cursor.execute("SELECT * FROM stravaValores sv WHERE sv.fecha = ?", (fecha))
+        except sqlite3.Error as error: 
+            print("Error al insertar en Entradas: %s", error)
+            logging.error("Error al insertar en Entradas: %s", error)
+            return False
+        finally:
+            rows = cursor.fetchall()
+            if rows.count > 0:
+                print("Resultado del SELECT: ", rows.count)
+                print("Chequeo ha ido bien.")
+                return True
+            else:
+                return False
+        
+    def operacionesFecha(self) -> bool:    
+        hoy = datetime.today()
+        print(hoy)
+        primer_dia_mes = hoy.replace(day=1)
+        print(primer_dia_mes)
+        # Saber mes
+        mes = hoy.month
+        while mes > 1:
+            check = self.chequearDatosBDD(primer_dia_mes)
+            if check:
+                self.extraerDatos
+                self.guardarDatosBDD(primer_dia_mes)
+
+            primer_dia_mes = primer_dia_mes - relativedelta(months=1)
+            mes -= 1
+
+        agnoPasado = primer_dia_mes.replace(month=12)
+        agnoPasado = agnoPasado - relativedelta(years=1)
+        print(agnoPasado)
+        mes = hoy.month
+        while mes > 1:
+            check = self.chequearDatosBDD(primer_dia_mes)
+            if check:
+                self.guardarDatosBDD(primer_dia_mes)
+
+            primer_dia_mes = primer_dia_mes - relativedelta(months=1)
+            mes -= 1            
+  
+        return True
+
+    def extraerDatos(self, fecha1, fecha2, tipoActividad="Ride"):
+        self.fecha_referencia = fecha1
+        self.fecha_objetivo = fecha2
         #client = Client(access_token=code)
 
         total_distancia = 0
         total_distancia2 = 0
         total_tiempo = 0
         total_tiempo2 = 0
-        total_desnivel = 0 
+        total_desnivel = 0
         total_desnivel2 = 0
         contador = 0
         contador2 = 0
 
-        for actividad in self.client.get_activities(before=self.fecha_objetivo):
-            if actividad.type == "Ride": 
+        for actividad in self.client.get_activities(before=self.fecha_referencia):
+            if actividad.type == tipoActividad: 
                 total_distancia += actividad.distance  # metros
                 total_tiempo += actividad.moving_time
                 total_desnivel += actividad.total_elevation_gain
                 contador += 1
 
-        for actividad2 in self.client.get_activities(before=self.fecha_hoy):
-            if actividad2.type == "Ride":
+        for actividad2 in self.client.get_activities(before=self.fecha_objetivo):
+            if actividad2.type == tipoActividad:
                 total_distancia2 += actividad2.distance  # metros
                 total_tiempo2 += actividad2.moving_time
                 total_desnivel2 += actividad2.total_elevation_gain
@@ -152,7 +204,7 @@ class StravaData:
         print("Tiempo (horas):", math.trunc((self.total_tiempo2-self.total_tiempo) / 3600))
         print("Desnivel (m):", math.trunc((self.total_desnivel2-self.total_desnivel)))
 
-    def guardarDatosBDD(self):
+    def guardarDatosBDD(self, fecha):
         # Meter los datos extraídos en base de datos.
         sqliteConnection = sqlite3.connect("./DB/dbbcfu.db")
         cursor = sqliteConnection.cursor()
@@ -160,7 +212,7 @@ class StravaData:
 
         try:
             cursor = sqliteConnection.cursor()
-            cursor.execute("INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas) VALUES (?, ?, ?, ?, ?, ?)", (self.fecha_hoy, math.trunc((self.total_distancia2-self.total_distancia)  / 1000), 
+            cursor.execute("INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas) VALUES (?, ?, ?, ?, ?, ?)", (fecha, math.trunc((self.total_distancia2-self.total_distancia)  / 1000), 
                 math.trunc((self.total_desnivel2-self.total_desnivel)), "bike", self.total_actividades, math.trunc((self.total_tiempo2-self.total_tiempo) / 3600))            )
         except sqlite3.Error as error: 
             print("Error al insertar en Entradas: %s", error)
