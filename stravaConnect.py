@@ -1,5 +1,7 @@
 # You will use this to log in to your Strava account
 import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse, parse_qs
 import json
 import sys
 import math
@@ -9,8 +11,36 @@ from dateutil.relativedelta import relativedelta
 
 import sqlite3
 import logging
+import threading
+import requests
+import time
 
 from stravalib.client import Client
+
+class OAuthHandler(BaseHTTPRequestHandler):
+
+    code = None
+    server_instance = None
+
+    def do_GET(self):
+
+        query = parse_qs(urlparse(self.path).query)
+
+        if "code" in query:
+            OAuthHandler.code = query["code"][0]
+
+            print("Code :", OAuthHandler.code)
+
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Authorization successful. You can close this window.")
+
+            # avisar al programa principal
+            OAuthHandler.event.set()
+
+        else:
+            self.send_response(400)
+            self.end_headers()
 
 class StravaData:
     contador = 0
@@ -18,7 +48,7 @@ class StravaData:
     client_id = ""
     client_secret = "" 
     code = ""
-    client = ""
+    client = None
     total_distancia = 0 
     total_distancia2 = 0
     total_desnivel = 0 
@@ -29,10 +59,17 @@ class StravaData:
     fecha_referencia = datetime 
     fecha_objetivo = datetime
 
+    sqliteConnection = 0
+    cursor = 0
+
     # Constructor: inicializa atributos (características)
     def __init__(self):
         self.contador = 0
         self.contador2 = 0
+
+        self.sqliteConnection = sqlite3.connect("./DB/dbbcfu.db")
+        self.cursor = self.sqliteConnection.cursor()
+        logging.info("Successfully Connected to SQLite")
 
     # Open the secrets file and store the client ID and client secret as objects, separated by a comma
     # Read below to learn how to set up the app that provides you with the client ID
@@ -60,7 +97,43 @@ class StravaData:
         self.client_secret = valor2
         self.code = valor5
 
-# sys.exit()
+    def get_strava_code(self, client_id):
+
+        event = threading.Event()
+        OAuthHandler.event = event
+
+        server = HTTPServer(("127.0.0.1", 5000), OAuthHandler)
+
+        # servidor en thread
+        thread = threading.Thread(target=server.serve_forever)
+        thread.daemon = True
+        thread.start()
+
+        print("Servidor OAuth escuchando en puerto 5000")
+
+        # URL de autorización Strava
+        auth_url = (
+            f"https://www.strava.com/oauth/authorize"
+            f"?client_id={client_id}"
+            f"&response_type=code"
+            f"&redirect_uri=http://127.0.0.1:5000"
+            f"&scope=activity:read"
+        )
+
+        # abrir navegador
+        webbrowser.open(auth_url)
+
+        print("Esperando autorización del usuario...")
+
+        # esperar a que llegue el code
+        event.wait()
+
+        server.shutdown()
+        thread.join()
+
+        return OAuthHandler.code
+
+
     def crearObjetoCliente(self):
         #   Create a client object
         self.client = Client()
@@ -76,8 +149,101 @@ class StravaData:
         url = self.client.authorization_url(
             client_id=self.client_id,
             redirect_uri=redirect_url,
-            scope=request_scope,)
+            scope=request_scope,)  
 
+        tokens = self.load_tokens()
+
+        if tokens is not None:
+            access_token = self.get_valid_token()
+        else:
+            print("No hay tokens guardados. Necesario OAuth.")
+            CLIENT_ID = self.client_id
+
+            code = self.get_strava_code(CLIENT_ID)
+            print("Code final recibido:", code)   
+            tokens = self.get_tokens(self.client_id, self.client_secret, code)
+            print("Tokens :", tokens) 
+            self.save_tokens(tokens)
+            print("Token saved - hooray!")
+            access_token = tokens["access_token"]
+            print("Access Token --> ", access_token)
+        
+        
+        # Access and refresh tokens
+
+        # Example output of token_response
+        # {'access_token': 'value-here-123123123', 'refresh_token': # '123123123',
+        # 'expires_at': 1673665980}
+        self.client = Client(access_token=access_token)
+        # Get current athlete details
+        athlete = self.client.get_athlete()
+        # Print athlete name :) If this works, your connection is successful!
+        print(f"Hi, {athlete.firstname} Welcome to stravalib!")
+
+        # You are now successfully authenticated!
+
+    def get_tokens(self, client_id, client_secret, code):
+        url = "https://www.strava.com/oauth/token"
+
+        payload = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+            "grant_type": "authorization_code"
+        }
+
+        r = requests.post(url, data=payload)
+        tokens = r.json()
+
+        return tokens
+
+    def save_tokens(self, tokens):
+        with open("Resources/strava_tokens.json", "w") as f:
+            json.dump(tokens, f)
+            f.flush()
+
+    def load_tokens(self):
+        try:
+            with open("Resources/strava_tokens.json") as f:
+                return json.load(f)
+
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def refresh_token(client_id, client_secret, refresh_token):
+        url = "https://www.strava.com/oauth/token"
+
+        payload = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token
+        }
+
+        r = requests.post(url, data=payload)
+
+        return r.json()
+
+    def token_expired(self, tokens):
+        return time.time() > tokens["expires_at"]
+
+    def get_valid_token(self):
+        tokens = self.load_tokens()
+
+        if self.token_expired(tokens):
+            print("Token caducado, refrescando...")
+
+            tokens = self.refresh_token(
+                self.client_id,
+                self.client_secret,
+                tokens["refresh_token"]
+            )
+
+            self.save_tokens(tokens)
+
+        return tokens["access_token"]
+
+    def primeraEntrada(self, url):
         # Open the URL in a web browser
         webbrowser.open(url)
 
@@ -86,43 +252,59 @@ class StravaData:
             """http://127.0.0.1:5000/authorization?state=&code=12323423423423423423423550&scope=read,activity:read_all,profile:read_all,read_all")""",
             """Copy the values between code= and & in the url that you see in the browser. """,
         )
-  
-        # Using input allows you to copy the code into your Python console
-        # (or Jupyter Notebook)
-        code = input("Please enter the code that you received: ")
-        print(
-            f"Great! Your code is {code}\n"
-            "Next, I will exchange that code for a token.\n"
-            "I only have to do this once."
-        )
 
+    def guardarTokenBDD(self) -> bool:
+        try:
+            self.cursor.execute("INSERT into token FROM stravaValores sv WHERE sv.fecha = ?", (fecha))
+        except sqlite3.Error as error: 
+            print("Error al insertar en Entradas: %s", error)
+            logging.error("Error al insertar en Entradas: %s", error)
+            return False
+        finally:
+            rows = self.cursor.fetchall()
+            if rows.count > 0:
+                print("Resultado del SELECT: ", rows.count)
+                print("Chequeo ha ido bien.")
+                return True
+            else:
+                return False
 
-        #    Exchange the code returned from Strava for an access token
-        token_response = self.client.exchange_code_for_token(client_id=self.client_id, client_secret=self.client_secret, code=code)
-        with open("Resources/token_response.json", "w", encoding="utf-8") as f:
-            json.dump(token_response, f, ensure_ascii=False, indent=2)
+    def actualizarTokenBDD(self, toek) -> bool:
+        try:
+            self.cursor.execute("UPDATE token SET refresh_token = ?", (toek))
+            print("UPDATE Token correcto !!")
+            logging.error("UPDATE Token correcto !!")
+        except sqlite3.Error as error: 
+            print("Error al UPDATE el token: %s", error)
+            logging.error("Error al UPDATE el token:  %s", error)
+            return False
 
-        # Save the token response as a JSON file
-        with open("Resources/token_response.json", "w") as f:
-            json.dump(token_response, f)
+    def recuperarTokenBDD(self) -> str:
+        try:
+            self.cursor.execute("select refresh_token from token")
+            resultado = self.cursor.fetchone()
+            refresh_token = resultado[0]
+            return refresh_token
+        except sqlite3.Error as error: 
+            print("Error al SELECT Token: %s", error)
+            logging.error("Error al SELECT Token: %s", error)
+            return "Error"            
 
-        print("Token saved - hooray!")
-
-        # Access and refresh tokens
-        access_token = token_response["access_token"]
-        refresh_token = token_response["refresh_token"]  # Use this after 6 hours
-
-        print(f"Token Response -->  {token_response}" )
-        # Example output of token_response
-        # {'access_token': 'value-here-123123123', 'refresh_token': # '123123123',
-        # 'expires_at': 1673665980}
-
-        # Get current athlete details
-        athlete = self.client.get_athlete()
-        # Print athlete name :) If this works, your connection is successful!
-        print(f"Hi, {athlete.firstname} Welcome to stravalib!")
-
-        # You are now successfully authenticated!
+    def checkearTokenBDD(self) -> bool:
+        try:
+            self.cursor.execute("SELECT * FROM token")
+        except sqlite3.Error as error: 
+            print("Error al ejecutar la SELECT: %s", error)
+            logging.error("Error al ejecutar la SELECT: %s", error)
+            return False
+        finally:
+            rows = self.cursor.fetchall()
+            if len(rows) > 0:
+                print("Resultado del SELECT: ", rows.count)
+                print("Chequeo ha ido bien.")
+                return True
+            else:
+                return False
 
     def chequearDatosBDD(self, fecha) -> bool:
         sqliteConnection = sqlite3.connect("./DB/dbbcfu.db")
@@ -138,7 +320,7 @@ class StravaData:
             return False
         finally:
             rows = cursor.fetchall()
-            if rows.count > 0:
+            if len(rows) > 0:
                 print("Resultado del SELECT: ", rows.count)
                 print("Chequeo ha ido bien.")
                 return True
@@ -219,18 +401,13 @@ class StravaData:
 
     def guardarDatosBDD(self, fecha):
         # Meter los datos extraídos en base de datos.
-        sqliteConnection = sqlite3.connect("./DB/dbbcfu.db")
-        cursor = sqliteConnection.cursor()
-        logging.info("Successfully Connected to SQLite")
-
         try:
-            cursor = sqliteConnection.cursor()
-            cursor.execute("INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas) VALUES (?, ?, ?, ?, ?, ?)", (fecha, math.trunc((self.total_distancia2-self.total_distancia)  / 1000), 
+            self.cursor.execute("INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas) VALUES (?, ?, ?, ?, ?, ?)", (fecha, math.trunc((self.total_distancia2-self.total_distancia)  / 1000), 
                 math.trunc((self.total_desnivel2-self.total_desnivel)), "bike", self.total_actividades, math.trunc((self.total_tiempo2-self.total_tiempo) / 3600))            )
             
-            sqliteConnection.commit()
+            self.sqliteConnection.commit()
             
-            if cursor.rowcount > 0:
+            if self.cursor.rowcount > 0:
                 print("Registro insertado correctamente")
                 logging.info("Registro insertado correctamente")
             else:
