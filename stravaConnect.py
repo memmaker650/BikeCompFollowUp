@@ -210,7 +210,7 @@ class StravaData:
         except (FileNotFoundError, json.JSONDecodeError):
             return None
 
-    def refresh_token(client_id, client_secret, refresh_token):
+    def refresh_token(self, client_id, client_secret, refresh_token):
         url = "https://www.strava.com/oauth/token"
 
         payload = {
@@ -364,46 +364,46 @@ class StravaData:
         print("Fecha Objetivo: ", self.fecha_objetivo)
         #client = Client(access_token=code)
 
-        total_distancia = 0
-        total_distancia2 = 0
-        total_tiempo = 0
-        total_tiempo2 = 0
-        total_desnivel = 0
-        total_desnivel2 = 0
-        contador = 0
-        contador2 = 0
+        self.total_distancia = 0
+        self.total_distancia2 = 0
+        self.total_tiempo = 0
+        self.total_tiempo2 = 0
+        self.total_desnivel = 0
+        self.total_desnivel2 = 0
+        self.contador = 0
+        self.contador2 = 0
 
-        for actividad in self.client.get_activities(before=self.fecha_referencia):
+        for actividad in self.client.get_activities(after=self.fecha_referencia, before=self.fecha_objetivo):
             if actividad.type == tipoActividad: 
-                total_distancia += actividad.distance  # metros
-                total_tiempo += actividad.moving_time
-                total_desnivel += actividad.total_elevation_gain
-                contador += 1
+                self.total_distancia += actividad.distance  # metros
+                self.total_tiempo += actividad.moving_time
+                self.total_desnivel += actividad.total_elevation_gain
+                self.contador += 1
         
-        print("Parte 1 FIN")
-
-        for actividad2 in self.client.get_activities(before=self.fecha_objetivo):
-            if actividad2.type == tipoActividad:
-                total_distancia2 += actividad2.distance  # metros
-                total_tiempo2 += actividad2.moving_time
-                total_desnivel2 += actividad2.total_elevation_gain
-                contador2 += 1
-
-        print("Parte 2 end")
-
-        self.total_actividades = math.trunc(contador2-contador)
+        #print("Parte 1 FIN")
+#
+        #for actividad2 in self.client.get_activities(before=self.fecha_objetivo):
+        #    if actividad2.type == tipoActividad:
+        #        total_distancia2 += actividad2.distance  # metros
+        #        total_tiempo2 += actividad2.moving_time
+        #        total_desnivel2 += actividad2.total_elevation_gain
+        #        contador2 += 1
+#
+        #print("Parte 2 end")
+#
+        self.total_actividades = math.trunc(self.contador)
 
     def imprimirDatos(self):
-        print("Actividades:", math.trunc(self.contador2-self.contador))
-        print("Distancia (km):", math.trunc((self.total_distancia2-self.total_distancia)  / 1000))
-        print("Tiempo (horas):", math.trunc((self.total_tiempo2-self.total_tiempo) / 3600))
-        print("Desnivel (m):", math.trunc((self.total_desnivel2-self.total_desnivel)))
+        print("Actividades:", math.trunc(self.contador))
+        print("Distancia (km):", math.trunc(self.total_distancia  / 1000))
+        print("Tiempo (horas):", math.trunc(self.total_tiempo / 3600))
+        print("Desnivel (m):", math.trunc(self.total_desnivel))
 
     def guardarDatosBDD(self, fecha):
         # Meter los datos extraídos en base de datos.
         try:
-            self.cursor.execute("INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas) VALUES (?, ?, ?, ?, ?, ?)", (fecha, math.trunc((self.total_distancia2-self.total_distancia)  / 1000), 
-                math.trunc((self.total_desnivel2-self.total_desnivel)), "bike", self.total_actividades, math.trunc((self.total_tiempo2-self.total_tiempo) / 3600))            )
+            self.cursor.execute("INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas) VALUES (?, ?, ?, ?, ?, ?)", (fecha, math.trunc(self.total_distancia/ 1000), 
+                math.trunc(self.total_desnivel), "bike", self.total_actividades, math.trunc(self.total_tiempo / 3600)))
             
             self.sqliteConnection.commit()
             
@@ -415,6 +415,4 @@ class StravaData:
                 logging.warning("No se insertó ningún registro")
         except sqlite3.Error as error: 
             print("Error al insertar en Entradas: %s", error)
-            logging.error("Error al insertar en Entradas: %s", error)
-
-        print("Fin Guardado de datos.") 
+            logging.error("Error al insertar en Entradas: %s", error) 

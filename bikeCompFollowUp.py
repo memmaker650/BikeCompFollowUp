@@ -104,7 +104,7 @@ class HolaMundoApp(toga.App):
             # Botón que cambia el texto (ahora circular con símbolo '+')
             boton = toga.Button(
                 cadena,
-            on_press=self.barraProgresoCargaDatos,
+            on_press=self.ir_a_pantalla_recoleccionDatos,
             style=Pack(width=140, height=60, padding=0))
 
             contenido_box.add(boton)
@@ -472,7 +472,10 @@ class HolaMundoApp(toga.App):
         datosStrava.extraerDatos(datetime(2025, 12, 31), datetime.now())
         datosStrava.guardarDatosBDD(datetime.now())
 
-    def barraProgresoCargaDatos(self, widget):    
+    def ir_a_pantalla_recoleccionDatos(self, widget):
+        self.main_window.content = self.barraProgresoCargaDatos()    
+
+    def barraProgresoCargaDatos(self):    
 
         self.total = 20
 
@@ -499,9 +502,10 @@ class HolaMundoApp(toga.App):
         boton_datos = toga.Button("Extraer Datos Strava", on_press=self.recolectarDatosStrava, style=Pack(padding=10))
         box.add(boton_datos)
 
-        self.main_window = toga.MainWindow(title="Ejemplo ProgressBar")
-        self.main_window.content = box
-        self.main_window.show()
+        # self.main_window = toga.MainWindow(title="Ejemplo ProgressBar")
+        # self.main_window.content = box
+        # self.main_window.show()
+        return box
 
 def main():
     logging.basicConfig(filename="./log/bikecfu.log", level=logging.DEBUG,

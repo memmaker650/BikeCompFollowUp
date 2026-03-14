@@ -4,3 +4,5 @@ log/bikecfu.log
 Resources/client_secrets.txt
 
 .DS_Store
+
+__pycache__/stravaConnect.cpython-311.pyc
