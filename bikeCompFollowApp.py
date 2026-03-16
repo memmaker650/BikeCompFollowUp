@@ -14,6 +14,7 @@ from datetime import datetime
 import stravaConnect
 import threading
 import asyncio
+from plyer import notification
 
 class HolaMundoApp(toga.App):
     sqliteConnection = 0
@@ -124,7 +125,7 @@ class HolaMundoApp(toga.App):
         )
 
         boton_siguiente = toga.Button(
-            "+",
+            "+ Usuario",
             on_press=self.ir_a_pantalla_dos,
             style=Pack(margin=10)
         )
@@ -456,6 +457,7 @@ class HolaMundoApp(toga.App):
 
     def iniciar_tarea(self, widget):
         self.add_background_task(self.tarea_larga)
+        notification.notify(title="Inicio", message="Fin Tareas", app_name="BikeCompFollowApp", app_icon="Resources/bici2.icns")
 
     async def tarea_larga(self, widget):
         for i in range(1, self.total + 1):
@@ -502,6 +504,19 @@ class HolaMundoApp(toga.App):
         boton_datos = toga.Button("Extraer Datos Strava", on_press=self.recolectarDatosStrava, style=Pack(padding=10))
         box.add(boton_datos)
 
+        # Barra inferior con botón a la izquierda (por defecto)
+        barra_inferior = toga.Box(
+            style=Pack(direction=ROW)
+        )
+        boton_volver = toga.Button(
+            "◀ Volver",
+            on_press=self.volver_pantalla_inicial,
+            style=Pack(margin=10)
+        )
+
+        barra_inferior.add(boton_volver)
+        box.add(barra_inferior)
+
         # self.main_window = toga.MainWindow(title="Ejemplo ProgressBar")
         # self.main_window.content = box
         # self.main_window.show()
@@ -513,7 +528,7 @@ def main():
     logging.warning("Inicio pyiOS!!!")
 
     # Nombre visible y ID de la app (ajústalo a tu dominio)
-    return HolaMundoApp("Bike Comp Follow App", "org.ejemplo.holamundo", icon="resources/bici2.png")
+    return HolaMundoApp("Bike Comp Follow App", "org.ejemplo.holamundo", icon="Resources/bici2.png")
 
 if __name__ == "__main__":
     app = main()
