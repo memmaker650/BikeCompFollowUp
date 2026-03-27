@@ -14,33 +14,126 @@ import sqlite3
 import logging
 from datetime import datetime
 
-from . import stravaConnect
+if __name__ == "__main__" or __package__ is None:
+    import stravaConnect
+else:
+    from . import stravaConnect
 import asyncio
 from plyer import notification
 
+
+class AppPaths:
+    app = None
+
+    @classmethod
+    def init(cls, app):
+        cls.app = app
+
+    @classmethod
+    def base_dir(cls, kind="data"):
+        """
+        kind: data | cache
+        """
+
+        # 🟢 Caso 1: Toga (Briefcase dev / iOS / macOS app)
+        if cls.app and hasattr(cls.app, "paths"):
+            return getattr(cls.app.paths, kind)
+
+        # 🟡 Caso 2: desarrollo local (Cursor, PyCharm, python directo)
+        project_root = Path(__file__).resolve().parent.parent.parent
+
+        if kind == "data":
+            base = project_root / "data"
+        elif kind == "cache":
+            base = project_root / "cache"
+        else:
+            base = project_root / kind
+
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+
+    @classmethod
+    def get(cls, kind="data", filename=None):
+        base = cls.base_dir(kind)
+        return base / filename if filename else base
+
 class BikeCompFollowApp(toga.App):
+    cursor = None
     sqliteConnection = 0
     index_entrada = 0
+    db_path = None
+    log_path = None
 
-    def open_document(self, file):
-        # Ignorar cualquier documento que intente abrir la app
-        return
+    def startup(self):
+        # ✅ AQUÍ sí existe self
+        AppPaths.init(self)
+        print("APP ID:", self.app_id)
+
+        self.main_window = toga.MainWindow(title=self.formal_name)
+        
+        # Obtener la ruta del directorio actual del script
+        self.log_path = AppPaths.get("data", "bikecfu.log")
+        print("DATA DIR:", self.paths.data)
+        print("Log DIR:", self.log_path)
+        
+        logging.basicConfig(filename=self.log_path, level=logging.DEBUG,
+        format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',datefmt='%Y-%m-%d %H:%M:%S')
+        logging.info("Inicio BikeCompFollowApp iOS App!!!")
+        print("Inicio BikeCompFollowApp iOS App!!!")
+
+        self.arrancarDB()
+
+        # Pantalla inicial al arrancar
+        self.main_window.content = self.construir_pantalla_inicial()
+        self.main_window.show()
+
+    def chequearIntegrarDB(self):
+        self.cursor.execute("PRAGMA integrity_check;")
+        result = self.cursor.fetchone()
+
+        if result[0] == "ok":
+            print("✅ DB íntegra")
+        else:
+            print("❌ DB corrupta")
+
         
     def arrancarDB(self):
         # Obtener la ruta del directorio actual del script
-        ruta_actual = Path(__file__).resolve().parent.parent
-        # Construir la ruta al archivo en el directorio padre
-        ruta_db = ruta_actual.parent /'DB/dbbcfu.db'
-        self.sqliteConnection = sqlite3.connect(ruta_db)
-        cursor = self.sqliteConnection.cursor()
-        logging.info("Successfully Connected to SQLite")
+        
+        self.db_path = AppPaths.get("data", "dbbcfu.db")
+
+        # Esto crea el fichero si no existe
+        self.sqliteConnection = sqlite3.connect(self.db_path)
+        self.cursor = self.sqliteConnection.cursor()
+
+        print("DB DIR:", self.db_path)
+
+        # Crear tabla si no existe
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS datos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT,
+                fecha TEXT,
+                activo BOOLEAN
+            )
+            """)
+
+        self.sqliteConnection.commit()
+        print("Base de datos lista")
 
         logging.info('Creación Base de Datos y Tablas principales.')
         try:
-            res = cursor.execute("""select * FROM datos""")
+            res = self.cursor.execute("""select * FROM datos""")
+            tables = self.cursor.fetchall()
+            if not tables:
+                print("⚠️ Base de datos vacía o incorrecta")
+                return 
+            else:
+                print("Tablas encontradas:", tables)
+
             if res.fetchone() != None:
-                cursor.execute("""CREATE TABLE datos (id integer PRIMARY KEY, fecha Date, datos text NOT NULL, km integer NOT NULL, activo BOOLEAN NOT NULL)""")
-                cursor.execute("""CREATE TABLE estadisticas (id interger PRIMARY KEY, jugador text NOT NULL, partida integer, disparos integer, nivelmax integer NOT NULL, enemigosmuertos integer, vidasusadas integer)""")
+                self.cursor.execute("""CREATE TABLE datos (id integer PRIMARY KEY, fecha Date, datos text NOT NULL, km integer NOT NULL, activo BOOLEAN NOT NULL)""")
+                self.cursor.execute("""CREATE TABLE estadisticas (id interger PRIMARY KEY, jugador text NOT NULL, partida integer, disparos integer, nivelmax integer NOT NULL, enemigosmuertos integer, vidasusadas integer)""")
                 self.sqliteConnection.commit()
                 logging.info('Ejecución SQL creación tablas.')
 
@@ -53,7 +146,7 @@ class BikeCompFollowApp(toga.App):
 
         # Crear tabla de tipos de vehículo si no existe
         try:
-            cursor.execute(
+            self.cursor.execute(
                 """CREATE TABLE IF NOT EXISTS tipo_vehiculo (
                     id integer PRIMARY KEY,
                     nombre text NOT NULL UNIQUE
@@ -61,10 +154,10 @@ class BikeCompFollowApp(toga.App):
             )
 
             # Valores por defecto si la tabla está vacía
-            cursor.execute("SELECT COUNT(*) FROM tipo_vehiculo")
-            count = cursor.fetchone()[0]
+            self.cursor.execute("SELECT COUNT(*) FROM tipo_vehiculo")
+            count = self.cursor.fetchone()[0]
             if count == 0:
-                cursor.executemany(
+                self.cursor.executemany(
                     "INSERT INTO tipo_vehiculo (nombre) VALUES (?)",
                     [("Carretera",), ("Montaña",), ("Híbrida",)]
                 )
@@ -83,16 +176,15 @@ class BikeCompFollowApp(toga.App):
     # -------- Pantalla 1 (inicial) --------
     def construir_pantalla_inicial(self):
         main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
+        filas = None 
 
         contenido_box = toga.Box(
             style=Pack(direction=COLUMN, align_items=CENTER, gap=15)
         )
 
-        # Crear tabla de tipos de vehículo si no existe
-        cursor = self.sqliteConnection.cursor()
         try:
-            cursor.execute("""SELECT nombre, usuario from ENTRADAS""")
-            filas = cursor.fetchall()   # lista de tuplas (nombre, tipov)
+            self.cursor.execute("""SELECT nombre, usuario from ENTRADAS""")
+            filas = self.cursor.fetchall()   # lista de tuplas (nombre, tipov)
         except sqlite3.Error as error:
             logging.error("Error al crear/rellenar tabla tipo_vehiculo en SQLite %s", error)
 
@@ -104,17 +196,16 @@ class BikeCompFollowApp(toga.App):
 
         contenido_box.add(self.label)
 
-        for nombre, usuario in filas:
-            print("Nombre:", nombre, "Usuario:", usuario) 
-            
-            cadena = usuario + " \n " + nombre # Concatener 2 string añadiendo un salto de línea.
-            # Botón que cambia el texto (ahora circular con símbolo '+')
-            boton = toga.Button(
-                cadena,
-            on_press=self.ir_a_pantalla_recoleccionDatos,
-            style=Pack(width=140, height=60, padding=0))
+        if (filas != None):
+            for nombre, usuario in filas:
+                print("Nombre:", nombre, "Usuario:", usuario) 
 
-            contenido_box.add(boton)
+                cadena = usuario + " \n " + nombre # Concatener 2 string añadiendo un salto de línea.
+                # Botón que cambia el texto (ahora circular con símbolo '+')
+                boton = toga.Button(cadena, on_press=self.ir_a_pantalla_recoleccionDatos,
+                style=Pack(width=140, height=60, padding=0))
+
+                contenido_box.add(boton)
 
         # Espaciador vertical para empujar la barra inferior hacia abajo
         espaciador_vertical = toga.Box(style=Pack(flex=1))
@@ -383,13 +474,6 @@ class BikeCompFollowApp(toga.App):
 
     def volver_pantalla_inicial(self, widget):
         self.main_window.content = self.construir_pantalla_inicial()
-
-    def startup(self):
-        self.main_window = toga.MainWindow(title=self.formal_name)
-        self.arrancarDB()
-        # Pantalla inicial al arrancar
-        self.main_window.content = self.construir_pantalla_inicial()
-        self.main_window.show()
     
     # -------- Pantalla 3 --------
     def construir_pantalla_tres(self):
@@ -529,17 +613,8 @@ class BikeCompFollowApp(toga.App):
         return box
 
 def main():
-    # Obtener la ruta del directorio actual del script
-    ruta_actual = Path(__file__).resolve().parent.parent
-    print("RUTA: ", ruta_actual)
-    # Construir la ruta al archivo en el directorio padre
-    ruta_log = ruta_actual.parent /'log/bikecfu.log'
-    logging.basicConfig(filename=ruta_log, level=logging.DEBUG,
-    format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',datefmt='%Y-%m-%d %H:%M:%S')
-    logging.warning("Inicio BikeCompFollowApp iOS App!!!")
-
     # Nombre visible y ID de la app (ajústalo a tu dominio)
-    return BikeCompFollowApp("Bike Comp Follow App", "org.ejemplo.holamundo", icon="resources/icon.png")
+    return BikeCompFollowApp("Bike Comp Follow App", "com.SkullWithGasMask", icon="resources/icon.png")
 
 if __name__ == "__main__":
     app = main()

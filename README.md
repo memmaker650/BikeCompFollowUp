@@ -32,4 +32,7 @@ briefcase create iOS
 briefcase build iOS
 
 briefcase run iOS
-briefcase run iOS -d "iPhone 17 Pro::iOS 26.3"
+briefcase run iOS -d "iPhone 17 Pro::iOS 26.4"
+
+# Ubicación base de datos.
+/Users/memmaker650/Library/Application Support/org.ejemplo.holamundo/
