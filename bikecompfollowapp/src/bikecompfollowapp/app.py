@@ -96,7 +96,62 @@ class BikeCompFollowApp(toga.App):
         else:
             print("❌ DB corrupta")
 
+    # Método para borrar datos en cascada.
+    def borrarDatosDB(self):
+        logging.info("Dentro borrar Datos")
+
+    # Método para lanzar Notificaciones
+    def lanzarNotificacion(self):
+        logging.info("Dentro lanzar Notificación.")
+
+    def crearDBBasica(self):
+        try:
+            self.cursor.execute("""CREATE TABLE IF NOT EXISTS datos (id integer PRIMARY KEY, fecha Date, datos text NOT NULL, km integer NOT NULL, activo BOOLEAN NOT NULL)""")
+            self.cursor.execute("""CREATE TABLE IF NOT EXISTS Elemento (id INTEGER PRIMARY KEY,nombre TEXT)""")
+            self.cursor.execute("""CREATE TABLE IF NOT EXISTS stravaValores  (id integer PRIMARY KEY,  fecha date not NULL, valor INTEGER not NULL,  ascenso INTEGER, tipo TEXT not null, num_actividades INTEGER, horas INTEGER)""")
+            self.cursor.execute("""CREATE TABLE IF NOT EXISTS Entradas (id integer PRIMARY KEY,  fecha Date,  nombre text NOT NULL,  usuario text,  tipov integer NOT NULL, descripcion  TEXT NOT NULL, FOREIGN KEY (tipov) REFERENCES tipo_vehiculo(id))""")
+            self.cursor.execute("""CREATE TABLE IF NOT EXISTS linked_elements (id integer PRIMARY KEY, fecha Date, Entrada_num integer, num_elemento, FOREIGN KEY (Entrada_num) REFERENCES Entradas(id), FOREIGN KEY (num_Elemento) REFERENCES Elemento(id))""")
+            self.cursor.execute("""CREATE TABLE IF NOT EXISTS estadisticas (id interger PRIMARY KEY, jugador text NOT NULL, partida integer, disparos integer, nivelmax integer NOT NULL, enemigosmuertos integer, vidasusadas integer)""")
+            self.cursor.execute("""CREATE TABLE IF NOT EXISTS tipo_vehiculo (id	INTEGER PRIMARY KEY,vehiculo TEXT)""")
+        except sqlite3.Error as error:
+            logging.error("Error al crear Tablas en SQLite", error)
+            logging.error("Tablas ya existen en SQLite")
+        finally:
+            logging.info('Tablas DB creadas')
+            self.sqliteConnection.commit
+
+        # Carga de los datos básicos
+        try:
+            self.cursor.execute("""INSERT INTO tipo_vehiculo (vehiculo) VALUES ('Coche')""")
+            self.cursor.execute("""INSERT INTO tipo_vehiculo (vehiculo) VALUES ('Bici Carretera')""")
+            self.cursor.execute("""INSERT INTO tipo_vehiculo (vehiculo) VALUES ('Bici Gravel')""")
+            self.cursor.execute("""INSERT INTO tipo_vehiculo (vehiculo) VALUES ('Bici MTB')""")
+            self.cursor.execute("""INSERT INTO tipo_vehiculo (vehiculo) VALUES ('Tractor')""")
+        except sqlite3.Error as error:
+            logging.error("Error al cargar datos de las Tablas Básicas en SQLite", error)
+        finally:
+            logging.info('Carga de datos en Tipo Vehículos correcta.')
+            self.sqliteConnection.commit
         
+        try:
+            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('cadena')""")
+            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('pastillas freno')""")
+            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Cubierta')""")
+            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Cinta Manillar')""")
+            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Piñonera')""")
+            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Plato')""")
+            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Cambio Trasero')""")
+            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Líquido Frenos')""")
+            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Maneta Cambio')""")
+            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Cámara')""")
+        except sqlite3.Error as error:
+            logging.error("Error al cargar datos de las Tablas Básicas en SQLite", error)
+        finally:
+            logging.info('Carga de datos en Elementos correcta.')
+            self.sqliteConnection.commit
+
+        
+
     def arrancarDB(self):
         # Obtener la ruta del directorio actual del script
         
@@ -107,17 +162,7 @@ class BikeCompFollowApp(toga.App):
         self.cursor = self.sqliteConnection.cursor()
 
         print("DB DIR:", self.db_path)
-
-        # Crear tabla si no existe
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS datos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT,
-                fecha TEXT,
-                activo BOOLEAN
-            )
-            """)
-
+        
         self.sqliteConnection.commit()
         print("Base de datos lista")
 
@@ -127,15 +172,15 @@ class BikeCompFollowApp(toga.App):
             tables = self.cursor.fetchall()
             if not tables:
                 print("⚠️ Base de datos vacía o incorrecta")
+                self.crearDBBasica()
                 return 
             else:
                 print("Tablas encontradas:", tables)
 
             if res.fetchone() != None:
-                self.cursor.execute("""CREATE TABLE datos (id integer PRIMARY KEY, fecha Date, datos text NOT NULL, km integer NOT NULL, activo BOOLEAN NOT NULL)""")
-                self.cursor.execute("""CREATE TABLE estadisticas (id interger PRIMARY KEY, jugador text NOT NULL, partida integer, disparos integer, nivelmax integer NOT NULL, enemigosmuertos integer, vidasusadas integer)""")
+                self.crearDBBasica()
                 self.sqliteConnection.commit()
-                logging.info('Ejecución SQL creación tablas.')
+                logging.info('Ejecución SQL creación tablas Básicas.')
 
             logging.info('Ejecución SQL creación tablas.')
         except sqlite3.Error as error:
@@ -200,9 +245,9 @@ class BikeCompFollowApp(toga.App):
             for nombre, usuario in filas:
                 print("Nombre:", nombre, "Usuario:", usuario) 
 
-                cadena = usuario + " \n " + nombre # Concatener 2 string añadiendo un salto de línea.
+                cadena = usuario + "-" + nombre # Concatener 2 string añadiendo un salto de línea. " \n "
                 # Botón que cambia el texto (ahora circular con símbolo '+')
-                boton = toga.Button(cadena, on_press=self.ir_a_pantalla_recoleccionDatos,
+                boton = toga.Button(cadena, on_press=self.ir_a_pantalla_tres,
                 style=Pack(width=140, height=60, padding=0))
 
                 contenido_box.add(boton)
@@ -336,7 +381,6 @@ class BikeCompFollowApp(toga.App):
             style=Pack(width=250)
         )
         
-
         # Caja con dropdown "Elemento"
         caja_elemento = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
 
@@ -448,6 +492,7 @@ class BikeCompFollowApp(toga.App):
 
     def cargar_entrada(self, widget):
         texto1 = (self.entrada_texto.value or "").strip()
+        textoUser = (self.usuario_texto.value or "").strip()
         texto2 = (self.descripcion_texto.value or "").strip()
         tipov = (self.selection_tipo_vehiculo.value or "").strip()
         elemento = (self.selection_elemento.value or "").strip()
@@ -459,7 +504,7 @@ class BikeCompFollowApp(toga.App):
             cursor = self.sqliteConnection.cursor()
             cursor.execute(
                 "INSERT INTO Entradas (fecha, nombre, usuario, tipov, descripcion) VALUES (?, ?, ?, ?, ?)",
-                (f, texto1, usuario, tipov, texto2)
+                (f, texto1, textoUser, tipov, texto2)
             )
             self.sqliteConnection.commit()
         except sqlite3.Error as error:
@@ -490,6 +535,23 @@ class BikeCompFollowApp(toga.App):
 
         contenido_box.add(self.label_pantalla_dos)
 
+        # Definir tabla con cabeceras
+        self.tabla = toga.Table(
+            headings=["Nombre", "Edad", "Ciudad"],
+            data=[
+                ("Juan", 30, "Madrid"),
+                ("Ana", 25, "Barcelona"),
+                ("Luis", 40, "Valencia"),
+            ],
+            style=Pack(flex=1)
+        )
+
+        # Espaciador vertical para empujar la barra inferior hacia abajo
+        espaciador_vertical = toga.Box(style=Pack(flex=1))
+
+        contenido_box.add(self.tabla)
+
+
         # Barra inferior con botón a la izquierda (por defecto)
         barra_inferior = toga.Box(
             style=Pack(direction=ROW)
@@ -503,6 +565,7 @@ class BikeCompFollowApp(toga.App):
         barra_inferior.add(boton_volver)
 
         main_box.add(contenido_box)
+        main_box.add(espaciador_vertical)
         main_box.add(barra_inferior)
 
         return main_box

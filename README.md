@@ -1,5 +1,7 @@
 # PyiOS BikeCompFollowApp
 
+# Guía para compilar con Briefcase y que funcione en MAC o en iOS.
+
 # Instalar pyinstaller.
 pip install -U pyinstaller
 
@@ -14,6 +16,13 @@ pip install briefcase
 briefcase --version
 
 briefcase create macOS
+
+# Crear estructura del proyecto.
+briefcase new
+
+briefcase new macOS
+briefcase new iOS
+
 
 briefcase update
 # Para rengerar todo.
@@ -36,3 +45,16 @@ briefcase run iOS -d "iPhone 17 Pro::iOS 26.4"
 
 # Ubicación base de datos.
 /Users/memmaker650/Library/Application Support/org.ejemplo.holamundo/
+
+# Actualizar la compilación
+briefcase update iOS && briefcase build iOS && briefcase run iOS -d "iPhone 17 Pro::iOS 26.4"
+
+
+# Abrir ruta actual del Terminal
+open .
+
+# Abrir ruta pegada en el Terminal
+open /ruta/a/tu/carpeta
+
+# Abrir ruta pegada de un fichero desde el Terminal
+open -R /ruta/a/tu/archivo.txt
