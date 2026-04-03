@@ -75,7 +75,7 @@ class StravaData:
     # Read below to learn how to set up the app that provides you with the client ID
     # and the client secret
     def initConexion(self):    
-        with open("Resources/client_secrets.txt", "r", encoding="utf-8") as f:
+        with open("/resources/client_secrets.txt", "r", encoding="utf-8") as f:
             lineas = f.readlines()
 
         # Primera y segunda línea
