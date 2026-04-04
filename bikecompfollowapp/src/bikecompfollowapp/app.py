@@ -540,14 +540,37 @@ class BikeCompFollowApp(toga.App):
 
         contenido_box.add(self.label_pantalla_dos)
 
+        dataTable = None
+        data = None
+
+        # archivoscomponentes (id INTEGER PRIMARY KEY, usuario, elemento TEXT, descripcion TEXT, marca TEXT, fechaInsercion Date, distanciaLímite integer, tiempoLímite integer, activo BOOLEAN)
+        try:
+            cursor = self.sqliteConnection.cursor()
+            cursor.execute(
+                "SELECT elemento, descripcion, fechaInsercion, distanciaLimite, 'x', tiempoLimite, activo "
+                "FROM archivoscomponentes WHERE usuario = ?",
+                (self.usuarioSeleccionado,),
+            )
+            dataTable = cursor.fetchall()
+        except sqlite3.Error as error:
+            logging.error("Error en el SELECT de la TABLA Comp: %s", error)
+            print("Error en el SELECT de la TABLA Comp: %s", error)
+            data=[("Juan", "Madrid", "08-07-1984", 5000, 1249, 300, "True"),
+                ("Ana", "Barcelona","06-08-2020", 2500, 2300, 125, "False"),
+                ("Luis", "Zaragoza","28-11-2023", 3300, 256, 120, "True"),
+            ]
+        finally:
+            self.label_pantalla_dos.text = "Datos de la TABLA COMP leídos  correctamente."
+            self.label_pantalla_dos.style.color = rgb(0, 255, 0)
+            logging.info("Datos de TABLA LEÍDOS correctamente.")
+            if dataTable is not None:
+                data = dataTable
+
+
         # Definir tabla con cabeceras
         self.tabla = toga.Table(
-            headings=["Nombre", "Edad", "Ciudad", "Activo"],
-            data=[
-                ("Juan", 30, "Madrid", "Yes"),
-                ("Ana", 25, "Barcelona", "No"),
-                ("Luis", 40, "Valencia", "Yes"),
-            ],
+            headings=["Componente", "Descripción", "Fecha", "Distancia Max Comp", "Distancia desde Inserción", "Tiempo Montado", "Activo"],
+            data=data,
             style=Pack(flex=1)
         )
 
@@ -649,22 +672,28 @@ class BikeCompFollowApp(toga.App):
         tiempolim = 500
         distlim = 5000
 
-        if valor5 == None or valor5 == "":
+        #if not (mi_textinput.value or "").strip():
+        if not (valor5.value or "").strip():
             valor5 = distlim
-        if valor6 == None or valor6 == "":
+        else:
+            valor5 = valor5.value
+        if not (valor6.value or "").strip():
             valor6 = tiempolim
+        else:
+            valor6 = valor6.value
+        
 
         f = f = (valor1.value or "").strip() or datetime.today().strftime("%Y-%m-%d")
         print("Fecha de Inserción : ", f)
         print("Seleccion Elemento : ", valor2.value)
-        print("Distancia Límite : ", valor5.value)
-        print("Tiempo Límite : ", valor6.value)
+        print("Distancia Límite : ", valor5)
+        print("Tiempo Límite : ", valor6)
 
         try:
             cursor = self.sqliteConnection.cursor()
             cursor.execute(
                 "INSERT INTO archivoscomponentes (fechaInsercion, usuario, elemento, descripcion, marca, distanciaLimite, tiempoLimite) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (f, user, valor2.value, valor3.value, valor4.value, valor5.value, valor6.value)
+                (f, user, valor2.value, valor3.value, valor4.value, valor5, valor6)
             )
         except sqlite3.Error as error:
             print("Error al insertar en Entradas: %s", error)
