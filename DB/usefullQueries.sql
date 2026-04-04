@@ -75,3 +75,19 @@ INSERT INTO "main"."tipo_vehiculo" ("vehiculo") VALUES ('Bici Carretera');
 INSERT INTO "main"."tipo_vehiculo" ("vehiculo") VALUES ('Bici Gravel');
 INSERT INTO "main"."tipo_vehiculo" ("vehiculo") VALUES ('Bici MTB');
 INSERT INTO "main"."tipo_vehiculo" ("vehiculo") VALUES ('Tractor');
+
+-- Borrar duplicados
+DELETE FROM tipo_vehiculo
+WHERE id NOT IN (
+    SELECT MIN(id)
+    FROM tipo_vehiculo
+    GROUP BY vehiculo
+);
+
+
+DELETE FROM Elemento
+WHERE id NOT IN (
+    SELECT MIN(id)
+    FROM Elemento
+    GROUP BY nombre
+);

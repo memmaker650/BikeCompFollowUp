@@ -152,8 +152,6 @@ class BikeCompFollowApp(toga.App):
             logging.info('Carga de datos en Elementos correcta.')
             self.sqliteConnection.commit
 
-        
-
     def arrancarDB(self):
         # Obtener la ruta del directorio actual del script
         
@@ -170,7 +168,7 @@ class BikeCompFollowApp(toga.App):
 
         logging.info('Creación Base de Datos y Tablas principales.')
         try:
-            res = self.cursor.execute("""select * FROM datos""")
+            res = self.cursor.execute("""select * FROM Entradas""")
             tables = self.cursor.fetchall()
             if not tables:
                 print("⚠️ Base de datos vacía o incorrecta")
@@ -527,7 +525,7 @@ class BikeCompFollowApp(toga.App):
         main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
 
         contenido_box = toga.Box(
-            style=Pack(direction=COLUMN, padding_left=40, align_items='start')
+            style=Pack(direction=COLUMN, padding_left=40, align_items='start', flex=1)
         )
 
         titulo = "User: " + str(valor) 
@@ -566,18 +564,21 @@ class BikeCompFollowApp(toga.App):
             if dataTable is not None:
                 data = dataTable
 
+        data = list(data) if data is not None else []
+        # Altura según nº de filas (Toga no la calcula sola). Tope para listas largas → scroll dentro de la tabla.
+        _h_cabecera, _h_fila, _h_max = 28, 22, 520
+        _n = len(data)
+        _altura_tabla = _h_cabecera + max(_n, 1) * _h_fila
+        _altura_tabla = min(_altura_tabla, _h_max)
 
         # Definir tabla con cabeceras
         self.tabla = toga.Table(
             headings=["Componente", "Descripción", "Fecha", "Distancia Max Comp", "Distancia desde Inserción", "Tiempo Montado", "Activo"],
             data=data,
-            style=Pack(flex=1)
+            style=Pack(height=_altura_tabla),
         )
 
         contenido_box.add(self.tabla)
-
-        # Espaciador vertical para empujar la barra inferior hacia abajo
-        espaciador_vertical = toga.Box(style=Pack(flex=1))
 
         # Barra inferior con botón a la izquierda (por defecto)
         barra_inferior = toga.Box(
@@ -603,7 +604,6 @@ class BikeCompFollowApp(toga.App):
         barra_inferior.add(boton_nuevocomponente)
 
         main_box.add(contenido_box)
-        main_box.add(espaciador_vertical)
         main_box.add(barra_inferior)
 
         return main_box
