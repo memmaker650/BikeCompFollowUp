@@ -63,39 +63,47 @@ class StravaData:
     cursor = 0
 
     # Constructor: inicializa atributos (características)
-    def __init__(self):
+    def __init__(self, app):
+        self.app = app
         self.contador = 0
         self.contador2 = 0
 
-        self.sqliteConnection = sqlite3.connect("./DB/dbbcfu.db")
+        file_pathDB = self.app.paths.data / "dbbcfu.db" 
+        self.sqliteConnection = sqlite3.connect(file_pathDB)
         self.cursor = self.sqliteConnection.cursor()
         logging.info("Successfully Connected to SQLite")
 
     # Open the secrets file and store the client ID and client secret as objects, separated by a comma
     # Read below to learn how to set up the app that provides you with the client ID
     # and the client secret
-    def initConexion(self):    
-        with open("/resources/client_secrets.txt", "r", encoding="utf-8") as f:
-            lineas = f.readlines()
+    def initConexion(self):   
+        file_path = self.app.paths.data / "client_secrets.txt" 
+        print("Ruta dentro StravaData: ", file_path)
+        if file_path.exists():
+            with open(file_path, "r", encoding="utf-8") as f:
+                lineas = f.readlines()
 
-        # Primera y segunda línea
-        linea1 = lineas[0].strip()
-        linea2 = lineas[1].strip()
-        linea5 = lineas[4].strip()
+                # Primera y segunda línea
+                linea1 = lineas[0].strip()
+                linea2 = lineas[1].strip()
+                linea5 = lineas[4].strip()
 
-        # Tomar el texto que hay después de los dos puntos
-        # (split en el primer ':' y nos quedamos con la parte derecha)
-        valor1 = linea1.split(":", 1)[1].strip()
-        valor2 = linea2.split(":", 1)[1].strip()
-        valor5 = linea5.split(":", 1)[1].strip()
+                # Tomar el texto que hay después de los dos puntos
+                # (split en el primer ':' y nos quedamos con la parte derecha)
+                valor1 = linea1.split(":", 1)[1].strip()
+                valor2 = linea2.split(":", 1)[1].strip()
+                valor5 = linea5.split(":", 1)[1].strip()
 
-        print("Valor 1:", valor1)
-        print("Valor 2:", valor2)
-        print("Valor 5:", valor5)
+                print("Valor 1:", valor1)
+                print("Valor 2:", valor2)
+                print("Valor 5:", valor5)
 
-        self.client_id = valor1
-        self.client_secret = valor2
-        self.code = valor5
+                self.client_id = valor1
+                self.client_secret = valor2
+                self.code = valor5
+        else:
+            print("El fichero no existe, hago otra cosa")
+            # Aquí tu lógica alternativa
 
     def get_strava_code(self, client_id):
 
@@ -198,13 +206,15 @@ class StravaData:
         return tokens
 
     def save_tokens(self, tokens):
-        with open("Resources/strava_tokens.json", "w") as f:
+        file_path = self.app.paths.data / "strava_tokens.json" 
+        with open(file_path, "w") as f:
             json.dump(tokens, f)
             f.flush()
 
     def load_tokens(self):
+        file_path = self.app.paths.data / "strava_tokens.json"
         try:
-            with open("resources/strava_tokens.json") as f:
+            with open(file_path) as f:
                 return json.load(f)
 
         except (FileNotFoundError, json.JSONDecodeError):
@@ -401,6 +411,7 @@ class StravaData:
 
     def guardarDatosBDD(self, fecha):
         # Meter los datos extraídos en base de datos.
+        print("Dentro de guardado datos Strava en BDD")
         try:
             self.cursor.execute("INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas) VALUES (?, ?, ?, ?, ?, ?)", (fecha, math.trunc(self.total_distancia/ 1000), 
                 math.trunc(self.total_desnivel), "bike", self.total_actividades, math.trunc(self.total_tiempo / 3600)))

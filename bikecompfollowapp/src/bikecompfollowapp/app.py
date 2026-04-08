@@ -886,7 +886,7 @@ class BikeCompFollowApp(toga.App):
             self.label.text = f"Procesando {i} de {self.total}"
     
     def recolectarDatosStrava(self, widget):
-        datosStrava = stravaConnect.StravaData()
+        datosStrava = stravaConnect.StravaData(self)
         datosStrava.initConexion()
         datosStrava.crearObjetoCliente()
         datosStrava.extraerDatos(datetime(2025, 12, 31), datetime.now())
