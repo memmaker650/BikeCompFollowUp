@@ -7,6 +7,7 @@ import toga
 from toga.style import Pack
 from toga.style.pack import CENTER, COLUMN, ROW, LEFT, RIGHT, END
 from toga.colors import rgb
+from numpy import empty
 
 from pathlib import Path
 import sys
@@ -58,6 +59,7 @@ class AppPaths:
         return base / filename if filename else base
 
 class BikeCompFollowApp(toga.App):
+    label_estado = ""
     cursor = None
     sqliteConnection = 0
     index_entrada = 0
@@ -565,6 +567,7 @@ class BikeCompFollowApp(toga.App):
                 data = dataTable
 
         data = list(data) if data is not None else []
+        self.componentes_disponibles = [fila[0] for fila in data if fila and fila[0] is not None]
         # Altura según nº de filas (Toga no la calcula sola). Tope para listas largas → scroll dentro de la tabla.
         _h_cabecera, _h_fila, _h_max = 28, 22, 520
         _n = len(data)
@@ -574,6 +577,7 @@ class BikeCompFollowApp(toga.App):
         # Definir tabla con cabeceras
         self.tabla = toga.Table(
             headings=["Componente", "Descripción", "Fecha", "Distancia Max Comp", "Distancia desde Inserción", "Tiempo Montado", "Activo"],
+            accessors=["elemento", "descripcion", "fechaInsercion", "distanciaLimite", "distanciaDesdeInsercion", "tiempoLimite", "activo"],
             data=data,
             style=Pack(height=_altura_tabla),
         )
@@ -593,15 +597,29 @@ class BikeCompFollowApp(toga.App):
 
         espaciador_horizontal = toga.Box(style=Pack(flex=1))
 
+        # Espaciador vertical para empujar la barra inferior hacia abajo
+        container_vertical = toga.Box(style=Pack(direction=COLUMN))
+
         boton_nuevocomponente = toga.Button(
             "+ Componente",
             on_press=lambda widget, valor=valor:self.ir_a_pantalla_cinco(widget, valor),
             style=Pack(margin=10)
         )
 
+        boton_anadirLimAlerta = toga.Button(
+            "+ Límite Alerta",
+            on_press=lambda widget: self.PantallaNuevaAlerta(
+                self.obtener_componente_seleccionado(),
+                self.componentes_disponibles,
+            ),
+            style=Pack(margin=10)
+        )
+        container_vertical.add(boton_nuevocomponente)
+        container_vertical.add(boton_anadirLimAlerta)
+
         barra_inferior.add(boton_volver)
         barra_inferior.add(espaciador_horizontal)
-        barra_inferior.add(boton_nuevocomponente)
+        barra_inferior.add(container_vertical)
 
         main_box.add(contenido_box)
         main_box.add(barra_inferior)
@@ -610,6 +628,20 @@ class BikeCompFollowApp(toga.App):
 
     def ir_a_pantalla_tres(self, widget, valor):
         self.main_window.content = self.construir_pantalla_tres(valor)
+
+    def obtener_componente_seleccionado(self):
+        if not hasattr(self, "tabla") or self.tabla is None:
+            return None
+
+        seleccion = self.tabla.selection
+        if seleccion is None:
+            return None
+        if isinstance(seleccion, list):
+            seleccion = seleccion[0] if seleccion else None
+            if seleccion is None:
+                return None
+
+        return getattr(seleccion, "elemento", None)
 
     # -------- Pantalla 4 --------
     def construir_pantalla_cuatro(self):
@@ -872,6 +904,196 @@ class BikeCompFollowApp(toga.App):
 
     def ir_a_pantalla_cinco(self, widget, valor):
         self.main_window.content = self.construir_pantalla_cinco(valor)
+
+    # -------- Pantalla Nueva Límite Alerta --------
+    def construir_pantalla_nuevoLimiteAlerta(self, item, componentes=None):
+        main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
+
+        contenido_box = toga.Box(
+            style=Pack(direction=COLUMN, margin_left=40, align_items='start')
+        )
+
+        self.tituloPantallaAlerta = "Añadir Nuevo/s Límites de valor Sup/Inf para Alerta. " + self.label_estado
+
+        self.label_pantalla_LimiteNuevaAlerta = toga.Label(
+            self.tituloPantallaAlerta,
+            style=Pack(margin_bottom=20, text_align=CENTER)
+        )
+
+        contenido_box.add(self.label_pantalla_LimiteNuevaAlerta)
+
+        # Caja con dropdown "Elemento"
+        tipoAlerta = []
+        try:
+            cursor = self.sqliteConnection.cursor()
+            cursor.execute("SELECT nombre FROM Mercados ORDER BY nombre")
+            mercado = [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as error:
+            logging.error("Error al leer tabla Mercados %s", error)
+
+        # # Si no hay datos en la tabla Elemento, usamos una lista por defecto
+        if not tipoAlerta:
+            tipoAlerta = ["Precio Superior", "Precio Inferior"]
+
+        caja_tipoAlerta = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
+
+        label_tipoAlerta = toga.Label(
+            "Tipo Alerta : ",
+            style=Pack(margin_right=10)
+        )
+
+        self.seleccion_tipoAlerta = toga.Selection(
+            items=tipoAlerta,
+            style=Pack(width=250)
+        )
+        self.tipo_limite = self.seleccion_tipoAlerta
+        print("Tipo Límite: ",  self.tipo_limite.value)
+
+        # Caja con label "Descripción" a la izquierda y campo de texto a la derecha
+        caja_valor = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
+
+        label_nombre = toga.Label(
+            "Valor: ",
+            style=Pack(margin_right=10)
+        )
+
+        self.valor_texto = toga.TextInput(
+            placeholder="Escribe valor...",
+            style=Pack(width=250)
+        )
+
+        self.valor_limite = self.valor_texto
+
+        # Caja con label "Marca" a la izquierda y campo de texto a la derecha
+        caja_ticker = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
+
+        label_ticker = toga.Label(
+            "Componente: ",
+            style=Pack(margin_right=10)
+        )
+
+        componentes_disponibles = list(componentes or [])
+        if not componentes_disponibles and hasattr(self, "usuarioSeleccionado") and self.usuarioSeleccionado is not None:
+            try:
+                cursor = self.sqliteConnection.cursor()
+                cursor.execute(
+                    "SELECT elemento FROM archivoscomponentes WHERE usuario = ? ORDER BY elemento",
+                    (self.usuarioSeleccionado,),
+                )
+                componentes_disponibles = [row[0] for row in cursor.fetchall()]
+            except sqlite3.Error as error:
+                logging.error("Error al leer componentes para alerta %s", error)
+
+        if item and item not in componentes_disponibles:
+            componentes_disponibles.insert(0, item)
+
+        self.componente_dropdown = toga.Selection(
+            items=componentes_disponibles,
+            style=Pack(width=250)
+        )
+        if item in componentes_disponibles:
+            self.componente_dropdown.value = item
+
+        boton_Cargar = toga.Button(
+            "Añadir",
+            on_press=self.cargar_limiteAlerta,
+            style=Pack(margin=10)
+        )
+
+        caja_tipoAlerta.add(label_tipoAlerta)
+        caja_tipoAlerta.add(self.seleccion_tipoAlerta)
+        caja_valor.add(label_nombre)
+        caja_valor.add(self.valor_texto)
+        caja_ticker.add(label_ticker)
+        caja_ticker.add(self.componente_dropdown)
+
+        contenido_box.add(caja_tipoAlerta)
+        contenido_box.add(caja_valor)
+        contenido_box.add(caja_ticker)
+        
+        contenido_box.add(boton_Cargar)
+
+        # Espaciador vertical para empujar la barra inferior hacia abajo
+        espaciador_vertical = toga.Box(style=Pack(flex=1))
+
+        # Barra inferior con botón a la izquierda (por defecto)
+        barra_inferior = toga.Box(
+            style=Pack(direction=ROW)
+        )
+
+        boton_volver = toga.Button(
+            "◀ Volver",
+            on_press=lambda widget: self.ir_a_pantalla_tres(widget, self.usuarioSeleccionado),
+            style=Pack(margin=10)
+        )
+        barra_inferior.add(boton_volver)
+
+        main_box.add(contenido_box)
+        main_box.add(espaciador_vertical)
+        main_box.add(barra_inferior)
+
+        return main_box
+
+    def PantallaNuevaAlerta(self, item, componentes=None):
+        self.main_window.content = self.construir_pantalla_nuevoLimiteAlerta(item, componentes)
+
+    def cargar_limiteAlerta(self, widget=None):
+
+        if not getattr(self.tipo_limite, "value", None):
+            print("User debe rellenar TIPO DE ALERTA")
+            ok = False
+        else:
+            try:
+                cursor = self.sqliteConnection.cursor()
+
+                valor_limite = (self.valor_limite.value or "").strip()
+                print("Caja seleccion Tipo Límite: ", self.tipo_limite.value)
+                if self.tipo_limite.value == 'Precio Superior': 
+                    tipo_alerta = 'superior'
+                else:
+                    tipo_alerta = 'inferior'
+
+                ticker = (self.componente_dropdown.value or "").strip()
+
+                cursor.execute("""
+                    INSERT INTO limitesAlerta (tipo_limite, valor, ticker)
+                    VALUES (?, ?, ?) ON CONFLICT(tipo_limite, ticker) DO NOTHING
+                """, (tipo_alerta, valor_limite, ticker))
+
+                self.sqliteConnection.commit()
+                ok = True
+
+            except sqlite3.Error as error:
+                logging.error("Error al guardar Límite Alerta: %s", error)
+                print("Error al guardar Límite Alerta: %s", error)
+                ok = False
+
+        if ok:
+            self.label_estado = "✅"
+            self.label_pantalla_LimiteNuevaAlerta.text += self.label_estado
+            print("Límite Alerta guardado.")
+            return
+        else:
+            self.label_estado = "❌"
+            self.label_pantalla_LimiteNuevaAlerta.text += self.label_estado
+            print("Error al guardar Límite Alerta")        
+
+    def crearTablaAlertThresholds(self) -> bool:
+        try:
+            cursor = self.sqliteConnection.cursor()
+            cursor.execute("""CREATE TABLE IF NOT EXISTS LimitesAlerta (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT,
+            tipo_limite TEXT,
+            valor INTEGER,
+            UNIQUE(tipo_limite, ticker)
+            )""")
+            self.sqliteConnection.commit()
+            return True
+        except sqlite3.Error as error:
+            logging.error("Error en el CREAR la TABLA LimitesAlerta: %s", error)
+            print("Error en el CREAR la TABLA LimitesAlerta: %s", error)
+            return False
 
     def iniciar_tarea(self, widget):
         self.add_background_task(self.tarea_larga)

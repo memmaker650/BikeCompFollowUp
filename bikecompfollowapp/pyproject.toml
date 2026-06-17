@@ -25,6 +25,7 @@ requires = [
     "plyer",
     "requests",
     "python-dateutil",
+    "pydantic>=2,<3",
     "stravalib"
 ]
 test_requires = [
@@ -200,4 +201,3 @@ build_gradle_dependencies = [
 requires = [
     "toga-web~=0.5.0",
 ]
-
