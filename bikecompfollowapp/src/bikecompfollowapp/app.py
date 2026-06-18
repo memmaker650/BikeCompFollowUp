@@ -54,9 +54,15 @@ class AppPaths:
         return base
 
     @classmethod
-    def get(cls, kind="data", filename=None):
+    def get(cls, kind="data", *parts):
         base = cls.base_dir(kind)
-        return base / filename if filename else base
+
+        if not parts:
+            return base
+
+        path = base.joinpath(*parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
 class BikeCompFollowApp(toga.App):
     label_estado = ""
@@ -75,11 +81,11 @@ class BikeCompFollowApp(toga.App):
         self.main_window = toga.MainWindow(title=self.formal_name)
         
         # Obtener la ruta del directorio actual del script
-        self.log_path = AppPaths.get("data", "bikecfu.log")
+        self.log_path = AppPaths.get("data", "BikeCFU", "bikecfu.log")
         print("DATA DIR:", self.paths.data)
         print("Log DIR:", self.log_path)
         
-        logging.basicConfig(filename=self.log_path, level=logging.DEBUG,
+        logging.basicConfig(filename=str(self.log_path), level=logging.DEBUG,
         format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',datefmt='%Y-%m-%d %H:%M:%S')
         logging.info("Inicio BikeCompFollowApp iOS App!!!")
         print("Inicio BikeCompFollowApp iOS App!!!")
@@ -157,7 +163,7 @@ class BikeCompFollowApp(toga.App):
     def arrancarDB(self):
         # Obtener la ruta del directorio actual del script
         
-        self.db_path = AppPaths.get("data", "dbbcfu.db")
+        self.db_path = AppPaths.get("data", "BikeCFU", "dbbcfu.db")
 
         # Esto crea el fichero si no existe
         self.sqliteConnection = sqlite3.connect(self.db_path)
