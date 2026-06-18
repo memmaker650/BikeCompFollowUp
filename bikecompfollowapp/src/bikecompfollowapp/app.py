@@ -91,6 +91,7 @@ class BikeCompFollowApp(toga.App):
         print("Inicio BikeCompFollowApp iOS App!!!")
 
         self.arrancarDB()
+        self.crearTablaAlertThresholds()
 
         # Pantalla inicial al arrancar
         self.main_window.content = self.construir_pantalla_inicial()
@@ -120,7 +121,6 @@ class BikeCompFollowApp(toga.App):
             self.cursor.execute("""CREATE TABLE IF NOT EXISTS stravaValores  (id integer PRIMARY KEY,  fecha date not NULL, valor INTEGER not NULL,  ascenso INTEGER, tipo TEXT not null, num_actividades INTEGER, horas INTEGER)""")
             self.cursor.execute("""CREATE TABLE IF NOT EXISTS Entradas (id integer PRIMARY KEY,  fecha Date,  nombre text NOT NULL,  usuario text,  tipov integer NOT NULL, descripcion  TEXT NOT NULL, FOREIGN KEY (tipov) REFERENCES tipo_vehiculo(id))""")
             self.cursor.execute("""CREATE TABLE IF NOT EXISTS linked_elements (id integer PRIMARY KEY, fecha Date, Entrada_num integer, num_elemento, FOREIGN KEY (Entrada_num) REFERENCES Entradas(id), FOREIGN KEY (num_Elemento) REFERENCES Elemento(id))""")
-            self.cursor.execute("""CREATE TABLE IF NOT EXISTS estadisticas (id interger PRIMARY KEY, jugador text NOT NULL, partida integer, disparos integer, nivelmax integer NOT NULL, enemigosmuertos integer, vidasusadas integer)""")
             self.cursor.execute("""CREATE TABLE IF NOT EXISTS tipo_vehiculo (id	INTEGER PRIMARY KEY,vehiculo TEXT)""")
             self.cursor.execute("""CREATE TABLE IF NOT EXISTS archivoscomponentes (id INTEGER PRIMARY KEY, usuario NOT NULL, elemento TEXT NOT NULL, descripcion TEXT, marca TEXT, fechaInsercion Date NOT NULL, distanciaLímite integer, activo BOOLEAN NO NULL)""")
         except sqlite3.Error as error:
@@ -237,7 +237,7 @@ class BikeCompFollowApp(toga.App):
         )
 
         try:
-            self.cursor.execute("""SELECT nombre, usuario from ENTRADAS""")
+            self.cursor.execute("""SELECT nombre, usuario from EntradasUsers""")
             filas = self.cursor.fetchall()   # lista de tuplas (nombre, tipov)
         except sqlite3.Error as error:
             logging.error("Error al crear/rellenar tabla tipo_vehiculo en SQLite %s", error)
@@ -530,10 +530,10 @@ class BikeCompFollowApp(toga.App):
     
     # -------- Pantalla 3 --------
     def construir_pantalla_tres(self, valor):
-        main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
+        main_box = toga.Box(style=Pack(direction=COLUMN, margin=10))
 
         contenido_box = toga.Box(
-            style=Pack(direction=COLUMN, padding_left=40, align_items='start', flex=1)
+            style=Pack(direction=COLUMN, flex=1)
         )
 
         titulo = "User: " + str(valor) 
@@ -582,13 +582,24 @@ class BikeCompFollowApp(toga.App):
 
         # Definir tabla con cabeceras
         self.tabla = toga.Table(
-            headings=["Componente", "Descripción", "Fecha", "Distancia Max Comp", "Distancia desde Inserción", "Tiempo Montado", "Activo"],
+            headings=["Componente", "Descripción", "Fecha", "Km máx", "Km desde alta", "Tiempo", "Activo"],
             accessors=["elemento", "descripcion", "fechaInsercion", "distanciaLimite", "distanciaDesdeInsercion", "tiempoLimite", "activo"],
             data=data,
-            style=Pack(height=_altura_tabla),
+            on_select=self.actualizar_limites_componente_seleccionado,
+            style=Pack(height=_altura_tabla, flex=1),
         )
 
         contenido_box.add(self.tabla)
+
+        # Tabla de detalle: se rellena al seleccionar una fila de la tabla principal.
+        self.tablaLimites = toga.Table(
+            headings=["Componente", "Tipo Límite", "Valor"],
+            accessors=["componente", "tipo_limite", "valor"],
+            data=[],
+            style=Pack(height=_altura_tabla, flex=1),
+        )
+
+        contenido_box.add(self.tablaLimites)
 
         # Barra inferior con botón a la izquierda (por defecto)
         barra_inferior = toga.Box(
@@ -635,6 +646,7 @@ class BikeCompFollowApp(toga.App):
     def ir_a_pantalla_tres(self, widget, valor):
         self.main_window.content = self.construir_pantalla_tres(valor)
 
+    # Marcar componente seleccionado.
     def obtener_componente_seleccionado(self):
         if not hasattr(self, "tabla") or self.tabla is None:
             return None
@@ -648,6 +660,21 @@ class BikeCompFollowApp(toga.App):
                 return None
 
         return getattr(seleccion, "elemento", None)
+
+    # Buscar límite según Componente seleccionado.
+    def actualizar_limites_componente_seleccionado(self, widget=None):
+        componente = self.obtener_componente_seleccionado()
+
+        if not hasattr(self, "tablaLimites") or self.tablaLimites is None:
+            return
+
+        if not componente:
+            self.tablaLimites.data = []
+            return
+        print("Lim Componente: ", componente)
+        data = self.seleccionarLimitesComponente(componente) or []
+        print("Datos Lim Componente: ", data)
+        self.tablaLimites.data = data
 
     # -------- Pantalla 4 --------
     def construir_pantalla_cuatro(self):
@@ -1043,6 +1070,21 @@ class BikeCompFollowApp(toga.App):
     def PantallaNuevaAlerta(self, item, componentes=None):
         self.main_window.content = self.construir_pantalla_nuevoLimiteAlerta(item, componentes)
 
+    def seleccionarLimitesComponente(self, comp):
+        try:
+            cursor = self.sqliteConnection.cursor()
+            cursor.execute(
+                "SELECT componente, tipo_limite, valor FROM LimitesAlerta WHERE componente = ?",
+                (comp,),
+            )
+            dataTable = cursor.fetchall()
+            print("Select Resultado: ", dataTable)
+            return dataTable or []
+        except sqlite3.Error as error:
+            logging.error("Error al leer límites del Componente %s: %s", comp, error)
+            print("Error al leer límites del Componente %s: %s", comp, error)
+            return []
+
     def cargar_limiteAlerta(self, widget=None):
 
         if not getattr(self.tipo_limite, "value", None):
@@ -1059,12 +1101,12 @@ class BikeCompFollowApp(toga.App):
                 else:
                     tipo_alerta = 'inferior'
 
-                ticker = (self.componente_dropdown.value or "").strip()
+                compo = (self.componente_dropdown.value or "").strip()
 
                 cursor.execute("""
-                    INSERT INTO limitesAlerta (tipo_limite, valor, ticker)
-                    VALUES (?, ?, ?) ON CONFLICT(tipo_limite, ticker) DO NOTHING
-                """, (tipo_alerta, valor_limite, ticker))
+                    INSERT INTO limitesAlerta (tipo_limite, valor, componente)
+                    VALUES (?, ?, ?) ON CONFLICT(tipo_limite, componente) DO NOTHING
+                """, (tipo_alerta, valor_limite, compo))
 
                 self.sqliteConnection.commit()
                 ok = True
@@ -1089,7 +1131,7 @@ class BikeCompFollowApp(toga.App):
             cursor = self.sqliteConnection.cursor()
             cursor.execute("""CREATE TABLE IF NOT EXISTS LimitesAlerta (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT,
+            componente TEXT,
             tipo_limite TEXT,
             valor INTEGER,
             UNIQUE(tipo_limite, ticker)
