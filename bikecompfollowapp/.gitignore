@@ -63,3 +63,6 @@ logs/
 
 # Briefcase local configuratoin
 .briefcase/
+
+# Informes de tests
+reports/

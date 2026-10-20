@@ -1,4 +1,10 @@
 # This project was generated with 0.3.26 using template: https://github.com/beeware/briefcase-template @ v0.3.26
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+# Cada ejecución genera un informe HTML autocontenido y otro JUnit XML (para CI).
+addopts = "-v --html=reports/informe_tests.html --self-contained-html --junitxml=reports/junit.xml"
+
 [tool.briefcase]
 project_name = "BikeCompFollowApp"
 bundle = "com.SkullWithGasMask"
@@ -30,6 +36,7 @@ requires = [
 ]
 test_requires = [
     "pytest",
+    "pytest-html",
 ]
 
 [tool.briefcase.app.bikecompfollowapp.macOS]

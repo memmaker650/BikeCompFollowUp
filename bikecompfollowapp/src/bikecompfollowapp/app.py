@@ -721,7 +721,7 @@ class BikeCompFollowApp(toga.App):
         try:
             cursor = self.sqliteConnection.cursor()
             cursor.execute(
-                "UPDATE archivoscomponentes SET activo =False WHERE usuario = ? AND componente = ?", (componente, usuario)
+                "UPDATE archivoscomponentes SET activo = False WHERE usuario = ? AND elemento = ?", (usuario, componente)
             )
             self.sqliteConnection.commit()
         except sqlite3.Error as error:
@@ -961,12 +961,12 @@ class BikeCompFollowApp(toga.App):
         tipoAlerta = []
         try:
             cursor = self.sqliteConnection.cursor()
-            cursor.execute("SELECT nombre FROM Mercados ORDER BY nombre")
-            mercado = [row[0] for row in cursor.fetchall()]
+            cursor.execute("SELECT DISTINCT tipo_limite FROM LimitesAlerta WHERE tipo_limite IS NOT NULL ORDER BY tipo_limite")
+            tipoAlerta = [row[0] for row in cursor.fetchall()]
         except sqlite3.Error as error:
-            logging.error("Error al leer tabla Mercados %s", error)
+            logging.error("Error al leer tabla LimitesAlerta %s", error)
 
-        # # Si no hay datos en la tabla Elemento, usamos una lista por defecto
+        # # Si no hay datos en la tabla LimitesAlerta, usamos una lista por defecto
         if not tipoAlerta:
             tipoAlerta = ["Precio Superior", "Precio Inferior"]
 
