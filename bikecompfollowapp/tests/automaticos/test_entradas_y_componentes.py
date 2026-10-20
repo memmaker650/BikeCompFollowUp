@@ -73,7 +73,7 @@ def test_desactivar_componente(app, db, campo):
     datos["user"] = "Otro usuario"
     app.anadirComponente(**datos)
 
-    app.desactivarComponente("Cambio Trasero", "DaMario Bros")
+    assert app.desactivarComponente("Cambio Trasero", "DaMario Bros") is True
 
     filas = dict(db.execute("SELECT usuario, activo FROM archivoscomponentes"))
     assert filas == {"DaMario Bros": 0, "Otro usuario": 1}, "Solo se desactiva el del usuario indicado"
@@ -83,3 +83,21 @@ def test_desactivar_componente_inexistente_no_cambia_nada(app, db, campo):
     app.anadirComponente(**_rellenar_componente(campo))
     app.desactivarComponente("Plato", "DaMario Bros")
     assert db.execute("SELECT activo FROM archivoscomponentes").fetchone()[0] == 1
+
+
+def test_cargar_entrada_con_error_muestra_error(app, db, campo):
+    db.execute("DROP TABLE EntradasUsers")
+    _rellenar_entrada(app, campo)
+    app.cargar_entrada(None)
+    assert app.label_pantalla_dos.text == "Error al cargar la entrada."
+
+
+def test_anadir_componente_con_error_devuelve_false(app, db, campo):
+    db.execute("DROP TABLE archivoscomponentes")
+    assert app.anadirComponente(**_rellenar_componente(campo)) is False
+    assert app.label_pantalla_dos.text == "Error al cargar el componente."
+
+
+def test_desactivar_componente_con_error_devuelve_false(app, db):
+    db.execute("DROP TABLE archivoscomponentes")
+    assert app.desactivarComponente("Plato", "DaMario Bros") is False

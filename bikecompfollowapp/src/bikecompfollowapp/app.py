@@ -2,11 +2,11 @@
 App to follow up bike comp, sneakers and car comp to avoid breaks.
 """""""""""
 
-import datetime
 import toga
 from toga.style import Pack
-from toga.style.pack import CENTER, COLUMN, ROW, LEFT, RIGHT, END
+from toga.style.pack import CENTER, COLUMN, ROW, LEFT
 from toga.colors import rgb
+from toga.sources import AccessorColumn
 
 from pathlib import Path
 import sys
@@ -20,6 +20,99 @@ else:
     from . import stravaConnect
 import asyncio
 from plyer import notification
+
+# ---- Medidas de interfaz (Toga trabaja en píxeles; 1 cm ≈ 38 px a 96 ppp) ----
+ANCHO_CAMPO = 250
+ANCHO_BOTONES_MENU = 320
+ALTO_ESTADISTICAS = 130      # ≈ 3,5 cm
+ALTO_MANTENIMIENTO = 260     # el doble ≈ 7 cm
+ESPACIO = 10                 # separación entre botones
+
+DISTANCIA_LIMITE_DEFECTO = 5000
+TIEMPO_LIMITE_DEFECTO = 500
+ELEMENTOS_POR_DEFECTO = ["Cadena", "Pastillas Freno", "Cubiertas"]
+
+# Columnas de las tablas de la pantalla Estadísticas: (cabecera, atributo de la fila)
+COLUMNAS_COMPONENTES = [
+    ("Componente", "elemento"), ("Descripción", "descripcion"), ("Fecha", "fechaInsercion"),
+    ("Km máx", "distanciaLimite"), ("Km desde alta", "distanciaDesdeInsercion"),
+    ("Tiempo", "tiempoLimite"), ("Activo", "activo"),
+]
+COLUMNAS_LIMITES = [("Componente", "componente"), ("Tipo Límite", "tipo_limite"), ("Valor", "valor")]
+
+
+def _columnas(definicion):
+    return [AccessorColumn(cabecera, atributo) for cabecera, atributo in definicion]
+
+
+# Datos con los que se siembra una BD nueva
+VEHICULOS_INICIALES = ["Coche", "Bici Carretera", "Bici Gravel", "Bici MTB", "Tractor"]
+ELEMENTOS_INICIALES = [
+    "cadena", "pastillas freno", "Cubierta", "Cinta Manillar", "Piñonera",
+    "Plato", "Cambio Trasero", "Líquido Frenos", "Maneta Cambio", "Cámara",
+]
+
+# ---- Pantallas de mantenimiento ----
+PANTALLA_MANTENIMIENTO = "mantenimiento"
+
+# clave -> (título, filas de botones, alto de botón o None, pantalla anterior o None = menú usuario)
+PANTALLAS_MANTENIMIENTO = {
+    PANTALLA_MANTENIMIENTO: (
+        "Mantenimiento / Paso por taller",
+        [
+            ["Cadena", "Pastillas freno", "Cubiertas", "Líquido Tubeless"],
+            ["Cinta Manillar", "Disco Freno", "Rodamientos", "Otros"],
+        ],
+        None,
+        None,
+    ),
+    "componentes": (
+        "Componentes",
+        [
+            ["CADENA", "PASTILLA/S FRENO", "CUBIERTA", "TUBELESS"],
+            ["CINTA MANILLAR", "DISCO/s FRENO", "RODAMIENTOS"],
+            ["HORQUILLA", "SUSPENSIÓN", "Otros"],
+        ],
+        150,
+        PANTALLA_MANTENIMIENTO,
+    ),
+    "otros": (
+        "Otros componentes",
+        [
+            ["PEDALIER", "BIELAS", "Purgado FRENOS", "CAMBIO TRASERO"],
+            ["PIÑONERA", "PLATO/S", "MANETA/S PULSADORES", "PEDALES"],
+            ["ENGRASE GENERAL", "TIJA", "SILLÍN", "PEDALES", "ENGRASE EJES"],
+        ],
+        150,
+        "componentes",
+    ),
+    "rodamientos": (
+        "Rodamientos",
+        [
+            ["DIRECCIÓN SUPERIOR", "DIRECCIÓN INFERIOR", "RUEDA DELANTERA - INTERIOR", "RUEDA DELANTERA - EXTERIOR"],
+            ["RUEDA TRASERA - INTERIOR", "RUEDA TRASERA - EXTERIOR"],
+        ],
+        150,
+        "componentes",
+    ),
+    "tubeless": (
+        "Tubeless",
+        [
+            ["LIQUIDO", "PINCHAZO"],
+            ["CINTA TUBELESS", "AÑADIDO"],
+        ],
+        150,
+        "componentes",
+    ),
+}
+
+# (pantalla, texto del botón) -> subpantalla que abre. El resto de botones abren el alta de componente.
+SUBPANTALLAS_MANTENIMIENTO = {
+    (PANTALLA_MANTENIMIENTO, "Otros"): "componentes",
+    ("componentes", "Otros"): "otros",
+    ("componentes", "RODAMIENTOS"): "rodamientos",
+    ("componentes", "TUBELESS"): "tubeless",
+}
 
 
 class AppPaths:
@@ -131,33 +224,12 @@ class BikeCompFollowApp(toga.App):
 
         # Carga de los datos básicos
         try:
-            self.cursor.execute("""INSERT INTO tipo_vehiculo (vehiculo) VALUES ('Coche')""")
-            self.cursor.execute("""INSERT INTO tipo_vehiculo (vehiculo) VALUES ('Bici Carretera')""")
-            self.cursor.execute("""INSERT INTO tipo_vehiculo (vehiculo) VALUES ('Bici Gravel')""")
-            self.cursor.execute("""INSERT INTO tipo_vehiculo (vehiculo) VALUES ('Bici MTB')""")
-            self.cursor.execute("""INSERT INTO tipo_vehiculo (vehiculo) VALUES ('Tractor')""")
+            self.cursor.executemany("INSERT INTO tipo_vehiculo (vehiculo) VALUES (?)", [(v,) for v in VEHICULOS_INICIALES])
+            self.cursor.executemany("INSERT INTO Elemento (nombre) VALUES (?)", [(e,) for e in ELEMENTOS_INICIALES])
+            self.sqliteConnection.commit()
+            logging.info('Carga de datos básicos (tipo_vehiculo, Elemento) correcta.')
         except sqlite3.Error as error:
             logging.error("Error al cargar datos de las Tablas Básicas en SQLite: %s", error)
-        finally:
-            logging.info('Carga de datos en Tipo Vehículos correcta.')
-            self.sqliteConnection.commit()
-        
-        try:
-            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('cadena')""")
-            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('pastillas freno')""")
-            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Cubierta')""")
-            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Cinta Manillar')""")
-            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Piñonera')""")
-            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Plato')""")
-            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Cambio Trasero')""")
-            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Líquido Frenos')""")
-            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Maneta Cambio')""")
-            self.cursor.execute("""INSERT INTO Elemento (nombre) VALUES ('Cámara')""")
-        except sqlite3.Error as error:
-            logging.error("Error al cargar datos de las Tablas Básicas en SQLite: %s", error)
-        finally:
-            logging.info('Carga de datos en Elementos correcta.')
-            self.sqliteConnection.commit()
 
     def arrancarDB(self):
         # Obtener la ruta del directorio actual del script
@@ -218,920 +290,522 @@ class BikeCompFollowApp(toga.App):
         self.sqliteConnection.close()
         logging.info("The SQLite connection is closed")
 
+    # -------- Utilidades comunes de interfaz y BD --------
+    def _mostrar(self, contenido):
+        self.main_window.content = contenido
+
+    def _leer_lista(self, sql, params=(), por_defecto=()):
+        """Devuelve la primera columna de una SELECT, o `por_defecto` si falla o está vacía."""
+        try:
+            valores = [fila[0] for fila in self.sqliteConnection.execute(sql, params)]
+        except sqlite3.Error as error:
+            logging.error("Error en la consulta '%s': %s", sql, error)
+            valores = []
+        return valores or list(por_defecto)
+
+    @staticmethod
+    def _campo(texto, widget):
+        """Fila de formulario: etiqueta a la izquierda y widget a la derecha."""
+        caja = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
+        caja.add(toga.Label(texto, style=Pack(margin_right=10)))
+        caja.add(widget)
+        return caja
+
+    @staticmethod
+    def _texto(placeholder="Escribe algo...", **kwargs):
+        return toga.TextInput(placeholder=placeholder, style=Pack(width=ANCHO_CAMPO), **kwargs)
+
+    @staticmethod
+    def _boton(texto, accion):
+        return toga.Button(texto, on_press=accion, style=Pack(margin=10))
+
+    def _boton_volver(self, accion):
+        return self._boton("◀ Volver", lambda widget: accion())
+
+    @staticmethod
+    def _barra_inferior(izquierda=None, derecha=None):
+        """Barra inferior con un widget a la izquierda y otro a la derecha."""
+        barra = toga.Box(style=Pack(direction=ROW))
+        if izquierda is not None:
+            barra.add(izquierda)
+        barra.add(toga.Box(style=Pack(flex=1)))
+        if derecha is not None:
+            barra.add(derecha)
+        return barra
+
+    @staticmethod
+    def _pantalla(contenido, barra_inferior, margen=20):
+        """Pantalla estándar: contenido arriba y barra inferior empujada abajo."""
+        main_box = toga.Box(style=Pack(direction=COLUMN, margin=margen))
+        main_box.add(contenido)
+        main_box.add(toga.Box(style=Pack(flex=1)))
+        main_box.add(barra_inferior)
+        return main_box
+
+    @staticmethod
+    def _formulario():
+        return toga.Box(style=Pack(direction=COLUMN, margin_left=40, align_items='start'))
+
     # -------- Pantalla 1 (inicial) --------
     def construir_pantalla_inicial(self):
-        main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
-        filas = None 
         self.usuarioSeleccionado = ""
 
         contenido_box = toga.Box(
             style=Pack(direction=COLUMN, align_items=CENTER, gap=15)
         )
 
-        try:
-            self.cursor.execute("""SELECT nombre, usuario from EntradasUsers""")
-            filas = self.cursor.fetchall()   # lista de tuplas (nombre, tipov)
-        except sqlite3.Error as error:
-            logging.error("Error al crear/rellenar tabla tipo_vehiculo en SQLite %s", error)
-
-        # Texto inicial encima del botón
         self.label = toga.Label(
             "Selecciona el usuario",
             style=Pack(margin_bottom=20, text_align=CENTER)
         )
-
         contenido_box.add(self.label)
 
-        if (filas != None):
-            for nombre, usuario in filas:
-                print("Nombre:", nombre, "Usuario:", usuario) 
+        try:
+            filas = self.sqliteConnection.execute("SELECT nombre, usuario FROM EntradasUsers").fetchall()
+        except sqlite3.Error as error:
+            logging.error("Error al leer la tabla EntradasUsers: %s", error)
+            filas = []
 
-                cadena = usuario + "-" + nombre # Concatener 2 string añadiendo un salto de línea. " \n "
-                # Botón que cambia el texto (ahora circular con símbolo '+')
-                boton = toga.Button(cadena, on_press=lambda widget, valor=usuario: self.ir_a_pantalla_tres(widget, valor),
-                style=Pack(width=140, height=60, margin=0))
+        for nombre, usuario in filas:
+            contenido_box.add(toga.Button(
+                f"{usuario or ''}-{nombre or ''}",
+                on_press=lambda widget, valor=usuario: self.ir_a_menu_usuario(widget, valor),
+                style=Pack(width=140, height=60, margin=0),
+            ))
 
-                contenido_box.add(boton)
+        barra_inferior = self._barra_inferior(
+            derecha=self._boton("+ Usuario", self.ir_a_pantalla_dos),
+        )
+        return self._pantalla(contenido_box, barra_inferior)
 
-        # Espaciador vertical para empujar la barra inferior hacia abajo
-        espaciador_vertical = toga.Box(style=Pack(flex=1))
+    def volver_pantalla_inicial(self, widget=None):
+        self._mostrar(self.construir_pantalla_inicial())
 
-        # Barra inferior: botón izquierda, hueco en medio, botón derecha
-        barra_inferior = toga.Box(
-            style=Pack(direction=ROW)
+    # -------- Menú del usuario: Estadísticas / Mantenimiento --------
+    def construir_menu_usuario(self, usuario):
+        self.usuarioSeleccionado = usuario
+
+        estilo_comun = dict(
+            width=ANCHO_BOTONES_MENU, color="#FFFFFF", font_size=16, font_weight="bold",
+        )
+        self.boton_estadisticas = toga.Button(
+            "Estadísticas",
+            on_press=lambda widget: self.ir_a_pantalla_tres(widget, usuario),
+            style=Pack(height=ALTO_ESTADISTICAS, background_color="#FF8C00", **estilo_comun),
+        )
+        self.boton_mantenimiento = toga.Button(
+            "Mantenimiento / Paso por taller",
+            on_press=lambda widget: self.ir_a_mantenimiento(PANTALLA_MANTENIMIENTO),
+            style=Pack(height=ALTO_MANTENIMIENTO, background_color="#1E64C8", **estilo_comun),
         )
 
-        boton_strava = toga.Button(
-            "Strava Sync",
-            on_press=self.ir_a_pantalla_recoleccionDatos,
-            style=Pack(margin=10)
+        contenido = toga.Box(
+            children=[
+                toga.Label(f"Usuario: {usuario}", style=Pack(margin_bottom=20, font_size=16)),
+                self.boton_estadisticas,
+                toga.Box(style=Pack(height=ESPACIO)),
+                self.boton_mantenimiento,
+            ],
+            style=Pack(direction=COLUMN, align_items=CENTER, flex=1),
         )
 
-        boton_siguiente = toga.Button(
-            "+ Usuario",
-            on_press=self.ir_a_pantalla_dos,
-            style=Pack(margin=10)
+        barra_inferior = self._barra_inferior(
+            izquierda=self._boton("Strava Sync", self.ir_a_pantalla_recoleccionDatos),
+            derecha=self._boton_volver(self.volver_pantalla_inicial),
         )
+        return self._pantalla(contenido, barra_inferior)
 
-        espaciador_horizontal = toga.Box(style=Pack(flex=1))
+    def ir_a_menu_usuario(self, widget=None, usuario=None):
+        if usuario is None:
+            usuario = self.usuarioSeleccionado
+        self._mostrar(self.construir_menu_usuario(usuario))
 
-        barra_inferior.add(boton_strava)
-        barra_inferior.add(espaciador_horizontal)
-        barra_inferior.add(boton_siguiente)
+    # -------- Pantallas de mantenimiento (cuadrículas de componentes) --------
+    def construir_pantalla_mantenimiento(self, clave):
+        titulo, filas, alto_boton, _anterior = PANTALLAS_MANTENIMIENTO[clave]
+        estilo_boton = dict(flex=1, font_size=14)
+        if alto_boton:
+            estilo_boton["height"] = alto_boton
 
-        main_box.add(contenido_box)
-        main_box.add(espaciador_vertical)
-        main_box.add(barra_inferior)
+        rejilla = toga.Box(style=Pack(direction=COLUMN, flex=1))
+        for n, textos in enumerate(filas):
+            if n:
+                rejilla.add(toga.Box(style=Pack(height=ESPACIO)))
+            fila = toga.Box(style=Pack(direction=ROW, flex=1))
+            for i, texto in enumerate(textos):
+                if i:
+                    fila.add(toga.Box(style=Pack(width=ESPACIO)))
+                fila.add(toga.Button(
+                    texto,
+                    on_press=lambda widget, t=texto: self.pulsar_boton_mantenimiento(clave, t),
+                    style=Pack(**estilo_boton),
+                ))
+            rejilla.add(fila)
 
+        contenido = toga.Box(style=Pack(direction=COLUMN, flex=1))
+        contenido.add(toga.Label(titulo, style=Pack(margin_bottom=ESPACIO, font_size=16)))
+        contenido.add(rejilla)
+
+        main_box = toga.Box(style=Pack(direction=COLUMN, margin=10))
+        main_box.add(contenido)
+        main_box.add(self._barra_inferior(
+            izquierda=self._boton_volver(lambda: self.volver_desde_mantenimiento(clave)),
+        ))
         return main_box
 
-    def mostrar_hola_mundo(self, widget):
-        self.label.text = "Hola Mundo !"
-        self.label.style.color = rgb(255, 165, 0)
+    def ir_a_mantenimiento(self, clave):
+        self._mostrar(self.construir_pantalla_mantenimiento(clave))
 
-    def ir_a_pantalla_dos(self, widget):
-        self.main_window.content = self.construir_pantalla_dos()
+    def volver_desde_mantenimiento(self, clave):
+        anterior = PANTALLAS_MANTENIMIENTO[clave][3]
+        if anterior is None:
+            self.ir_a_menu_usuario()
+        else:
+            self.ir_a_mantenimiento(anterior)
 
-    # -------- Pantalla 2 --------
+    def pulsar_boton_mantenimiento(self, clave, texto):
+        """Un botón abre una subpantalla si la tiene; si no, el alta del componente."""
+        destino = SUBPANTALLAS_MANTENIMIENTO.get((clave, texto))
+        if destino:
+            self.ir_a_mantenimiento(destino)
+        else:
+            self._mostrar(self.construir_pantalla_cinco(
+                self.usuarioSeleccionado,
+                elemento=texto,
+                volver=lambda: self.ir_a_mantenimiento(clave),
+            ))
+
+    # -------- Pantalla 2 (alta de usuario / vehículo) --------
+    def ir_a_pantalla_dos(self, widget=None):
+        self._mostrar(self.construir_pantalla_dos())
+
     def construir_pantalla_dos(self):
-        main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
-
-        contenido_box = toga.Box(
-            style=Pack(direction=COLUMN, margin_left=40, align_items='start')
+        tipos_vehiculo = self._leer_lista(
+            "SELECT vehiculo FROM tipo_vehiculo ORDER BY vehiculo",
+            por_defecto=["Carretera", "Montaña", "Híbrida"],
+        )
+        tipos_elemento = self._leer_lista(
+            "SELECT nombre FROM Elemento ORDER BY nombre",
+            por_defecto=ELEMENTOS_POR_DEFECTO,
         )
 
         self.label_pantalla_dos = toga.Label(
             "Nueva Entrada",
             style=Pack(margin_bottom=20, text_align=CENTER)
         )
+        self.entrada_texto = self._texto()
+        self.usuario_texto = self._texto()
+        self.descripcion_texto = self._texto()
+        self.selection_tipo_vehiculo = toga.Selection(items=tipos_vehiculo, style=Pack(width=ANCHO_CAMPO))
+        self.selection_elemento = toga.Selection(items=tipos_elemento, style=Pack(width=ANCHO_CAMPO))
+        self.entrada_fecha = self._texto("Fecha instalación", value=datetime.today().strftime("%Y-%m-%d"))
+        boton_cargar = self._boton("Cargar", self.cargar_entrada)
+        boton_volver = self._boton_volver(self.volver_pantalla_inicial)
 
-        # Cargar opciones de tipo de vehículo desde la base de datos
-        tipos_vehiculo = []
-        try:
-            cursor = self.sqliteConnection.cursor()
-            cursor.execute("SELECT vehiculo FROM tipo_vehiculo ORDER BY vehiculo")
-            tipos_vehiculo = [row[0] for row in cursor.fetchall()]
-        except sqlite3.Error as error:
-            logging.error("Error al leer tabla tipo_vehiculo %s", error)
-
-        if not tipos_vehiculo:
-            tipos_vehiculo = ["Carretera", "Montaña", "Híbrida"]
-
-        tipos_elemento = []
-        try:
-            cursor = self.sqliteConnection.cursor()
-            cursor.execute("SELECT nombre FROM Elemento ORDER BY nombre")
-            tipos_elemento = [row[0] for row in cursor.fetchall()]
-        except sqlite3.Error as error:
-            logging.error("Error al leer tabla Elemento %s", error)
-
-        # Si no hay datos en la tabla Elemento, usamos una lista por defecto
-        if not tipos_elemento:
-            tipos_elemento = ["Cadena", "Pastillas Freno", "Cubiertas"]
-
-        # Caja con label "Nombre" a la izquierda y campo de texto a la derecha
-        caja_nombre = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_nombre = toga.Label(
-            "Nombre",
-            style=Pack(margin_right=10)
-        )
-
-        self.entrada_texto = toga.TextInput(
-            placeholder="Escribe algo...",
-            style=Pack(width=250)
-        )
-
-        # Caja con label "Usuario" a la izquierda y campo de texto a la derecha
-        caja_usuario = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_usuario = toga.Label(
-            "Usuario",
-            style=Pack(margin_right=10)
-        )
-
-        self.usuario_texto = toga.TextInput(
-            placeholder="Escribe algo...",
-            style=Pack(width=250)
-        )
-
-        # Caja con label "DEscripción" a la izquierda y campo de texto a la derecha
-        caja_descripcion = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_descripcion = toga.Label(
-            "Descripción: ",
-            style=Pack(margin_right=10)
-        )
-
-        self.descripcion_texto = toga.TextInput(
-            placeholder="Escribe algo...",
-            style=Pack(width=250)
-        )
-
-        # Caja con dropdown "Tipo vehículo"
-        caja_tipo_vehiculo = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-        
-
-        label_tipo_vehiculo = toga.Label(
-            "Tipo vehículo",
-            style=Pack(margin_right=10)
-        )
-
-        self.selection_tipo_vehiculo = toga.Selection(
-            items=tipos_vehiculo,
-            style=Pack(width=250)
-        )
-        
-        # Caja con dropdown "Elemento"
-        caja_elemento = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_elemento = toga.Label(
-            "Elemento",
-            style=Pack(margin_right=10)
-        )
-
-        self.selection_elemento = toga.Selection(
-            items=tipos_elemento,
-            style=Pack(width=250)
-        )
-
-        # Caja con label "Fecha" a la izquierda y campo de texto a la derecha
-        caja_fecha = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_fecha = toga.Label(
-            "Fecha",
-            style=Pack(margin_right=10)
-        )
-
-        self.entrada_fecha = toga.TextInput(
-            placeholder="Fecha instalación",
-            style=Pack(width=250),
-            value=datetime.today().strftime("%Y-%m-%d")
-        )
+        contenido_box = self._formulario()
+        contenido_box.add(self.label_pantalla_dos)
+        contenido_box.add(self._campo("Nombre", self.entrada_texto))
+        contenido_box.add(self._campo("Usuario", self.usuario_texto))
+        contenido_box.add(self._campo("Descripción: ", self.descripcion_texto))
+        contenido_box.add(self._campo("Tipo vehículo", self.selection_tipo_vehiculo))
+        contenido_box.add(self._campo("Elemento", self.selection_elemento))
+        contenido_box.add(self._campo("Fecha", self.entrada_fecha))
+        contenido_box.add(boton_cargar)
 
         # Orden de tabulación (Tab) entre campos
-        self.entrada_texto.tab_index = 0
-        self.usuario_texto.tab_index = 1
-        self.descripcion_texto.tab_index = 2
-        self.selection_tipo_vehiculo.tab_index = 3
-        self.selection_elemento.tab_index = 4
-        self.entrada_fecha.tab_index = 5
-
-        caja_nombre.add(label_nombre)
-        caja_nombre.add(self.entrada_texto)
-
-        caja_usuario.add(label_usuario)
-        caja_usuario.add(self.usuario_texto)
-
-        caja_descripcion.add(label_descripcion)
-        caja_descripcion.add(self.descripcion_texto)
-
-        caja_tipo_vehiculo.add(label_tipo_vehiculo)
-        caja_tipo_vehiculo.add(self.selection_tipo_vehiculo)
-
-        caja_elemento.add(label_elemento)
-        caja_elemento.add(self.selection_elemento)
-
-        caja_fecha.add(label_fecha)
-        caja_fecha.add(self.entrada_fecha)
-
-        boton_mostrar_texto = toga.Button(
-            "Cargar",
-            on_press=self.cargar_entrada,
-            style=Pack(margin=10)
-        )
-        boton_mostrar_texto.tab_index = 5
-
-        contenido_box.add(self.label_pantalla_dos)
-        contenido_box.add(caja_nombre)
-        contenido_box.add(caja_usuario)
-        contenido_box.add(caja_descripcion)
-        contenido_box.add(caja_tipo_vehiculo)
-        contenido_box.add(caja_elemento)
-        contenido_box.add(caja_fecha)
-        contenido_box.add(boton_mostrar_texto)
-
-        espaciador = toga.Box(style=Pack(flex=1))
-
-        # Barra inferior con botón a la izquierda (por defecto)
-        barra_inferior = toga.Box(
-            style=Pack(direction=ROW)
-        )
-
-        boton_volver = toga.Button(
-            "◀ Volver",
-            on_press=self.volver_pantalla_inicial,
-            style=Pack(margin=10)
-        )
-        boton_volver.tab_index = 6
-
-        barra_inferior.add(boton_volver)
-
+        orden_foco = [
+            self.entrada_texto, self.usuario_texto, self.descripcion_texto,
+            self.selection_tipo_vehiculo, self.selection_elemento, self.entrada_fecha,
+            boton_cargar, boton_volver,
+        ]
         # En macOS (Cocoa) tab_index no está implementado; enlazar cadena de foco a mano
         if sys.platform == "darwin":
             try:
-                n = lambda w: w._impl.native
-                n(self.entrada_texto).nextKeyView = n(self.usuario_texto)
-                n(self.usuario_texto).nextKeyView = n(self.descripcion_texto)
-                n(self.descripcion_texto).nextKeyView = n(self.selection_tipo_vehiculo)
-                n(self.selection_tipo_vehiculo).nextKeyView = n(self.selection_elemento)
-                n(self.selection_elemento).nextKeyView = n(self.entrada_fecha)
-                n(self.entrada_fecha).nextKeyView = n(boton_mostrar_texto)
-                n(boton_mostrar_texto).nextKeyView = n(boton_volver)
-                n(boton_volver).nextKeyView = n(self.entrada_texto)
+                for actual, siguiente in zip(orden_foco, orden_foco[1:] + orden_foco[:1]):
+                    actual._impl.native.nextKeyView = siguiente._impl.native
             except Exception as e:
                 logging.debug("No se pudo configurar cadena Tab en Cocoa: %s", e)
+        else:
+            for i, widget in enumerate(orden_foco):
+                widget.tab_index = i
 
-        main_box.add(contenido_box)
-        main_box.add(espaciador)
-        main_box.add(barra_inferior)
-
-        return main_box
-
-    def mostrar_texto_segunda(self, widget):
-        texto = (self.entrada_texto.value or "").strip()
-        self.label_pantalla_dos.text = texto if texto else "No has escrito nada"
+        return self._pantalla(contenido_box, self._barra_inferior(izquierda=boton_volver))
 
     def cargar_entrada(self, widget):
         texto1 = (self.entrada_texto.value or "").strip()
         textoUser = (self.usuario_texto.value or "").strip()
         texto2 = (self.descripcion_texto.value or "").strip()
         tipov = (self.selection_tipo_vehiculo.value or "").strip()
-        elemento = (self.selection_elemento.value or "").strip()
         f = (self.entrada_fecha.value or "").strip() or datetime.today().strftime("%Y-%m-%d")
 
         try:
-            cursor = self.sqliteConnection.cursor()
-            cursor.execute(
+            self.sqliteConnection.execute(
                 "INSERT INTO EntradasUsers (fecha, nombre, usuario, tipov, descripcion) VALUES (?, ?, ?, ?, ?)",
                 (f, texto1, textoUser, tipov, texto2)
             )
             self.sqliteConnection.commit()
         except sqlite3.Error as error:
-            
-            logging.error("Error al insertar en Entradas: %s", error)
-        finally:
-            self.label_pantalla_dos.text = "Entrada cargada correctamente."
-            self.label_pantalla_dos.style.color = rgb(0, 255, 0)
-            logging.info("Datos de Entrada cargados correctamente.")
+            logging.error("Error al insertar en EntradasUsers: %s", error)
+            self._mostrar_estado(self.label_pantalla_dos, "Error al cargar la entrada.", ok=False)
+            return
+        self._mostrar_estado(self.label_pantalla_dos, "Entrada cargada correctamente.")
+        logging.info("Datos de Entrada cargados correctamente.")
 
+    @staticmethod
+    def _mostrar_estado(label, texto, ok=True):
+        label.text = texto
+        label.style.color = rgb(0, 255, 0) if ok else rgb(255, 0, 0)
 
-
-    def volver_pantalla_inicial(self, widget):
-        self.main_window.content = self.construir_pantalla_inicial()
-    
-    # -------- Pantalla 3 --------
+    # -------- Pantalla 3 (Estadísticas: componentes del usuario) --------
     def construir_pantalla_tres(self, valor):
-        main_box = toga.Box(style=Pack(direction=COLUMN, margin=10))
-
-        contenido_box = toga.Box(
-            style=Pack(direction=COLUMN, flex=1)
-        )
-
-        titulo = "User: " + str(valor) 
         self.usuarioSeleccionado = valor
 
         self.label_pantalla_dos = toga.Label(
-            titulo,
+            f"User: {valor}",
             style=Pack(margin_bottom=20, text_align=CENTER)
         )
 
-        contenido_box.add(self.label_pantalla_dos)
-
-        dataTable = None
-        data = None
-
-        # archivoscomponentes (id INTEGER PRIMARY KEY, usuario, elemento TEXT, descripcion TEXT, marca TEXT, fechaInsercion Date, distanciaLímite integer, tiempoLímite integer, activo BOOLEAN)
         try:
-            cursor = self.sqliteConnection.cursor()
-            cursor.execute(
+            data = self.sqliteConnection.execute(
                 "SELECT elemento, descripcion, fechaInsercion, distanciaLimite, 'x', tiempoLimite, activo "
                 "FROM archivoscomponentes WHERE usuario = ?",
-                (self.usuarioSeleccionado,),
-            )
-            dataTable = cursor.fetchall()
+                (valor,),
+            ).fetchall()
+            logging.info("Datos de TABLA LEÍDOS correctamente.")
         except sqlite3.Error as error:
             logging.error("Error en el SELECT de la TABLA Comp: %s", error)
-            print("Error en el SELECT de la TABLA Comp: %s", error)
-            data=[("Juan", "Madrid", "08-07-1984", 5000, 1249, 300, "True"),
-                ("Ana", "Barcelona","06-08-2020", 2500, 2300, 125, "False"),
-                ("Luis", "Zaragoza","28-11-2023", 3300, 256, 120, "True"),
-            ]
-        finally:
-            self.label_pantalla_dos.text = "Datos de la TABLA COMP leídos  correctamente."
-            self.label_pantalla_dos.style.color = rgb(0, 255, 0)
-            logging.info("Datos de TABLA LEÍDOS correctamente.")
-            if dataTable is not None:
-                data = dataTable
+            self._mostrar_estado(self.label_pantalla_dos, "Error al leer los componentes.", ok=False)
+            data = []
 
-        data = list(data) if data is not None else []
         self.componentes_disponibles = [fila[0] for fila in data if fila and fila[0] is not None]
         # Altura según nº de filas (Toga no la calcula sola). Tope para listas largas → scroll dentro de la tabla.
         _h_cabecera, _h_fila, _h_max = 28, 22, 520
-        _n = len(data)
-        _altura_tabla = _h_cabecera + max(_n, 1) * _h_fila
-        _altura_tabla = min(_altura_tabla, _h_max)
+        _altura_tabla = min(_h_cabecera + max(len(data), 1) * _h_fila, _h_max)
 
-        # Definir tabla con cabeceras
         self.tabla = toga.Table(
-            headings=["Componente", "Descripción", "Fecha", "Km máx", "Km desde alta", "Tiempo", "Activo"],
-            accessors=["elemento", "descripcion", "fechaInsercion", "distanciaLimite", "distanciaDesdeInsercion", "tiempoLimite", "activo"],
+            columns=_columnas(COLUMNAS_COMPONENTES),
             data=data,
             on_select=self.actualizar_limites_componente_seleccionado,
             style=Pack(height=_altura_tabla, flex=1),
         )
 
-        contenido_box.add(self.tabla)
-
-        separador_tablas = toga.Box(style=Pack(height=20))
-        contenido_box.add(separador_tablas)
-
-        # Texto inicial encima del botón
         self.Title_tablaLimites = toga.Label(
             "Límite Alerta: ",
             style=Pack(text_align=LEFT, font_size=16)
         )
-        contenido_box.add(self.Title_tablaLimites)
 
         # Tabla de detalle: se rellena al seleccionar una fila de la tabla principal.
         self.tablaLimites = toga.Table(
-            headings=["Componente", "Tipo Límite", "Valor"],
-            accessors=["componente", "tipo_limite", "valor"],
+            columns=_columnas(COLUMNAS_LIMITES),
             data=[],
             style=Pack(height=_altura_tabla, flex=1),
         )
 
-        contenido_box.add(self.tablaLimites)
-
-        # Barra inferior con botón a la izquierda (por defecto)
-        barra_inferior = toga.Box(
-            style=Pack(direction=ROW)
+        contenido_box = toga.Box(
+            children=[
+                self.label_pantalla_dos,
+                self.tabla,
+                toga.Box(style=Pack(height=20)),
+                self.Title_tablaLimites,
+                self.tablaLimites,
+            ],
+            style=Pack(direction=COLUMN, flex=1),
         )
 
-        boton_volver = toga.Button(
-            "◀ Volver",
-            on_press=self.volver_pantalla_inicial,
-            style=Pack(margin=10)
+        botones_derecha = toga.Box(
+            children=[
+                self._boton("+ Componente", lambda widget: self.ir_a_pantalla_cinco(widget, valor)),
+                self._boton("+ Límite Alerta", lambda widget: self.PantallaNuevaAlerta(
+                    self.obtener_componente_seleccionado(),
+                    self.componentes_disponibles,
+                )),
+            ],
+            style=Pack(direction=COLUMN),
         )
 
-        espaciador_horizontal = toga.Box(style=Pack(flex=1))
-
-        # Espaciador vertical para empujar la barra inferior hacia abajo
-        container_vertical = toga.Box(style=Pack(direction=COLUMN))
-
-        boton_nuevocomponente = toga.Button(
-            "+ Componente",
-            on_press=lambda widget, valor=valor:self.ir_a_pantalla_cinco(widget, valor),
-            style=Pack(margin=10)
-        )
-
-        boton_anadirLimAlerta = toga.Button(
-            "+ Límite Alerta",
-            on_press=lambda widget: self.PantallaNuevaAlerta(
-                self.obtener_componente_seleccionado(),
-                self.componentes_disponibles,
-            ),
-            style=Pack(margin=10)
-        )
-        container_vertical.add(boton_nuevocomponente)
-        container_vertical.add(boton_anadirLimAlerta)
-
-        barra_inferior.add(boton_volver)
-        barra_inferior.add(espaciador_horizontal)
-        barra_inferior.add(container_vertical)
-
+        main_box = toga.Box(style=Pack(direction=COLUMN, margin=10))
         main_box.add(contenido_box)
-        main_box.add(barra_inferior)
-
+        main_box.add(self._barra_inferior(
+            izquierda=self._boton_volver(self.ir_a_menu_usuario),
+            derecha=botones_derecha,
+        ))
         return main_box
 
     def ir_a_pantalla_tres(self, widget, valor):
-        self.main_window.content = self.construir_pantalla_tres(valor)
+        self._mostrar(self.construir_pantalla_tres(valor))
 
     # Marcar componente seleccionado.
     def obtener_componente_seleccionado(self):
-        if not hasattr(self, "tabla") or self.tabla is None:
-            return None
-
-        seleccion = self.tabla.selection
-        if seleccion is None:
-            return None
+        seleccion = getattr(getattr(self, "tabla", None), "selection", None)
         if isinstance(seleccion, list):
             seleccion = seleccion[0] if seleccion else None
-            if seleccion is None:
-                return None
-
         return getattr(seleccion, "elemento", None)
 
     # Buscar límite según Componente seleccionado.
     def actualizar_limites_componente_seleccionado(self, widget=None):
+        if getattr(self, "tablaLimites", None) is None:
+            return
         componente = self.obtener_componente_seleccionado()
-
-        if not hasattr(self, "tablaLimites") or self.tablaLimites is None:
-            return
-
-        if not componente:
-            self.tablaLimites.data = []
-            return
-        print("Lim Componente: ", componente)
-        data = self.seleccionarLimitesComponente(componente) or []
-        print("Datos Lim Componente: ", data)
-        self.tablaLimites.data = data
-
-    # -------- Pantalla 4 --------
-    def construir_pantalla_cuatro(self):
-        main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
-
-        contenido_box = toga.Box(
-            style=Pack(direction=COLUMN, margin_left=40, align_items='start')
-        )
-
-        self.label_pantalla_dos = toga.Label(
-            "Pantalla 4",
-            style=Pack(margin_bottom=20, text_align=CENTER)
-        )
-
-        contenido_box.add(self.label_pantalla_dos)
-
-        # Espaciador vertical para empujar la barra inferior hacia abajo
-        espaciador_vertical = toga.Box(style=Pack(flex=1))
-
-        # Barra inferior con botón a la izquierda (por defecto)
-        barra_inferior = toga.Box(
-            style=Pack(direction=ROW)
-        )
-
-        boton_volver = toga.Button(
-            "◀ Volver",
-            on_press=self.volver_pantalla_inicial,
-            style=Pack(margin=10)
-        )
-        barra_inferior.add(boton_volver)
-
-        main_box.add(contenido_box)
-        main_box.add(espaciador_vertical)
-        main_box.add(barra_inferior)
-
-        return main_box
-
-    def ir_a_pantalla_cuatro(self, widget):
-        self.main_window.content = self.construir_pantalla_cuatro()
+        self.tablaLimites.data = self.seleccionarLimitesComponente(componente) if componente else []
 
     def desactivarComponente(self, componente, usuario):
         try:
-            cursor = self.sqliteConnection.cursor()
-            cursor.execute(
+            self.sqliteConnection.execute(
                 "UPDATE archivoscomponentes SET activo = False WHERE usuario = ? AND elemento = ?", (usuario, componente)
             )
             self.sqliteConnection.commit()
         except sqlite3.Error as error:
-            
             logging.error("Error al DESACTIVAR el Componente: %s", error)
-        finally:
-            self.label_pantalla_dos.text = "Entrada cargada correctamente."
-            self.label_pantalla_dos.style.color = rgb(0, 255, 0)
-            logging.info("UPDATE hecho para DESACTIVAR Componente.")
+            return False
+        logging.info("UPDATE hecho para DESACTIVAR Componente.")
+        return True
 
-    # CREATE TABLE IF NOT EXISTS archivoscomponentes (id INTEGER PRIMARY KEY, usuario NOT NULL, elemento TEXT NOT NULL, descripcion TEXT, marca TEXT, fechaInsercion Date NOT NULL, distanciaLímite integer, tiempoLímite integer, activo BOOLEAN DEFAULT True)
+    # CREATE TABLE IF NOT EXISTS archivoscomponentes (id INTEGER PRIMARY KEY, usuario NOT NULL, elemento TEXT NOT NULL, descripcion TEXT, marca TEXT, fechaInsercion Date NOT NULL, distanciaLimite integer, tiempoLimite integer, activo BOOLEAN DEFAULT True)
     def anadirComponente(self, valor1, user, valor2, valor3, valor4, valor5=None, valor6=None):
         logging.info("Dentro añadir Componente.")
 
-        tiempolim = 500
-        distlim = 5000
-
-        #if not (mi_textinput.value or "").strip():
-        if not (valor5.value or "").strip():
-            valor5 = distlim
-        else:
-            valor5 = valor5.value
-        if not (valor6.value or "").strip():
-            valor6 = tiempolim
-        else:
-            valor6 = valor6.value
-        
-
-        f = f = (valor1.value or "").strip() or datetime.today().strftime("%Y-%m-%d")
-        print("Fecha de Inserción : ", f)
-        print("Seleccion Elemento : ", valor2.value)
-        print("Distancia Límite : ", valor5)
-        print("Tiempo Límite : ", valor6)
+        distancia = (getattr(valor5, "value", None) or "").strip() or DISTANCIA_LIMITE_DEFECTO
+        tiempo = (getattr(valor6, "value", None) or "").strip() or TIEMPO_LIMITE_DEFECTO
+        f = (valor1.value or "").strip() or datetime.today().strftime("%Y-%m-%d")
 
         try:
-            cursor = self.sqliteConnection.cursor()
-            cursor.execute(
+            self.sqliteConnection.execute(
                 "INSERT INTO archivoscomponentes (fechaInsercion, usuario, elemento, descripcion, marca, distanciaLimite, tiempoLimite) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (f, user, valor2.value, valor3.value, valor4.value, valor5, valor6)
+                (f, user, valor2.value, valor3.value, valor4.value, distancia, tiempo)
             )
-        except sqlite3.Error as error:
-            print("Error al insertar en Entradas: %s", error)
-            logging.error("Error al insertar en Entradas: %s", error)
-        finally:
             self.sqliteConnection.commit()
-            self.label_pantalla_dos.text = "Entrada cargada correctamente."
-            self.label_pantalla_dos.style.color = rgb(0, 255, 0)
-            logging.info("Datos de Entrada cargados correctamente.")
-
-    def cargar_componente(self, entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto) -> bool: 
-        logging.info("Dentro de método Cargar Componente.")
-        print("Dentro de método Cargar Componente.")
-        self.anadirComponente(entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto)
-
+        except sqlite3.Error as error:
+            logging.error("Error al insertar en archivoscomponentes: %s", error)
+            self._mostrar_estado(self.label_pantalla_dos, "Error al cargar el componente.", ok=False)
+            return False
+        self._mostrar_estado(self.label_pantalla_dos, "Entrada cargada correctamente.")
+        logging.info("Componente cargado correctamente.")
         return True
 
-    # -------- Pantalla 5 --------
-    def construir_pantalla_cinco(self, valor):
-        main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
+    def cargar_componente(self, entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto) -> bool:
+        return self.anadirComponente(entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto)
 
-        contenido_box = toga.Box(
-            style=Pack(direction=COLUMN, margin_left=40, align_items='start')
+    # -------- Pantalla 5 (alta de componente) --------
+    def construir_pantalla_cinco(self, valor, elemento=None, volver=None):
+        """Alta de componente. `elemento` lo preselecciona; `volver` es la pantalla de retorno."""
+        tipos_elemento = self._leer_lista(
+            "SELECT nombre FROM Elemento ORDER BY nombre",
+            por_defecto=ELEMENTOS_POR_DEFECTO,
         )
-
-        tituloSreen5 = "Añadir Componente: "+str(valor)
+        if elemento:
+            coincidencia = next((e for e in tipos_elemento if e.casefold() == elemento.casefold()), None)
+            if coincidencia is None:
+                tipos_elemento.insert(0, elemento)
+                coincidencia = elemento
+            elemento = coincidencia
 
         self.label_pantalla_dos = toga.Label(
-            tituloSreen5,
+            f"Añadir Componente: {valor}",
             style=Pack(margin_bottom=20, text_align=CENTER)
         )
+        self.entrada_fecha = self._texto("Fecha instalación", value=datetime.today().strftime("%Y-%m-%d"))
+        self.selection_elemento = toga.Selection(items=tipos_elemento, style=Pack(width=ANCHO_CAMPO))
+        if elemento:
+            self.selection_elemento.value = elemento
+        self.descripcion_texto = self._texto()
+        self.marca_texto = self._texto()
+        self.distancialim_texto = self._texto()
+        self.tiempolim_texto = self._texto()
 
+        contenido_box = self._formulario()
         contenido_box.add(self.label_pantalla_dos)
+        contenido_box.add(self._campo("Fecha", self.entrada_fecha))
+        contenido_box.add(self._campo("Elemento", self.selection_elemento))
+        contenido_box.add(self._campo("Descripción: ", self.descripcion_texto))
+        contenido_box.add(self._campo("Marca Comp: ", self.marca_texto))
+        contenido_box.add(self._campo("Distancia Límite: ", self.distancialim_texto))
+        contenido_box.add(self._campo("Tiempo Límite: ", self.tiempolim_texto))
+        contenido_box.add(self._boton("Cargar", lambda widget: self.cargar_componente(
+            self.entrada_fecha, self.usuarioSeleccionado, self.selection_elemento, self.descripcion_texto,
+            self.marca_texto, self.distancialim_texto, self.tiempolim_texto,
+        )))
 
-        # Caja con label "Fecha" a la izquierda y campo de texto a la derecha
-        caja_fecha = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_fecha = toga.Label(
-            "Fecha",
-            style=Pack(margin_right=10)
-        )
-
-        self.entrada_fecha = toga.TextInput(
-            placeholder="Fecha instalación",
-            style=Pack(width=250),
-            value=datetime.today().strftime("%Y-%m-%d")
-        )
-
-        caja_fecha.add(label_fecha)
-        caja_fecha.add(self.entrada_fecha)
-
-        # Caja con dropdown "Elemento"
-        tipos_elemento = []
-        try:
-            cursor = self.sqliteConnection.cursor()
-            cursor.execute("SELECT nombre FROM Elemento ORDER BY nombre")
-            tipos_elemento = [row[0] for row in cursor.fetchall()]
-        except sqlite3.Error as error:
-            logging.error("Error al leer tabla Elemento %s", error)
-
-        # Si no hay datos en la tabla Elemento, usamos una lista por defecto
-        if not tipos_elemento:
-            tipos_elemento = ["Cadena", "Pastillas Freno", "Cubiertas"]
-
-        caja_elemento = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_elemento = toga.Label(
-            "Elemento",
-            style=Pack(margin_right=10)
-        )
-
-        self.selection_elemento = toga.Selection(
-            items=tipos_elemento,
-            style=Pack(width=250)
-        )
-
-        # Caja con label "Descripción" a la izquierda y campo de texto a la derecha
-        caja_descripcion = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_descripcion = toga.Label(
-            "Descripción: ",
-            style=Pack(margin_right=10)
-        )
-
-        self.descripcion_texto = toga.TextInput(
-            placeholder="Escribe algo...",
-            style=Pack(width=250)
-        )
-
-        # Caja con label "Marca" a la izquierda y campo de texto a la derecha
-        caja_marca = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_marca = toga.Label(
-            "Marca Comp: ",
-            style=Pack(margin_right=10)
-        )
-
-        self.marca_texto = toga.TextInput(
-            placeholder="Escribe algo...",
-            style=Pack(width=250)
-        )
-
-        # Caja con label "Marca" a la izquierda y campo de texto a la derecha
-        caja_tiempolim = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_tiempolim = toga.Label(
-            "Tiempo Límite: ",
-            style=Pack(margin_right=10)
-        )
-
-        self.tiempolim_texto = toga.TextInput(
-            placeholder="Escribe algo...",
-            style=Pack(width=250)
-        )
-
-        # Caja con label "Marca" a la izquierda y campo de texto a la derecha
-        caja_distancialim = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_distancialim = toga.Label(
-            "Distancia Límite: ",
-            style=Pack(margin_right=10)
-        )
-
-        self.distancialim_texto = toga.TextInput(
-            placeholder="Escribe algo...",
-            style=Pack(width=250)
-        )
-
-        boton_Cargar = toga.Button(
-            "Cargar",
-            on_press=lambda widget:self.cargar_componente(self.entrada_fecha, self.usuarioSeleccionado, self.selection_elemento, self.descripcion_texto, self.marca_texto, self.distancialim_texto, self.tiempolim_texto),
-            style=Pack(margin=10)
-        )
-
-        caja_elemento.add(label_elemento)
-        caja_elemento.add(self.selection_elemento)
-        caja_descripcion.add(label_descripcion)
-        caja_descripcion.add(self.descripcion_texto)
-        caja_marca.add(label_marca)
-        caja_marca.add(self.marca_texto)
-        caja_distancialim.add(label_distancialim)
-        caja_distancialim.add(self.distancialim_texto)
-        caja_tiempolim.add(label_tiempolim)
-        caja_tiempolim.add(self.tiempolim_texto)
-        
-
-        contenido_box.add(caja_fecha)
-        contenido_box.add(caja_elemento)
-        contenido_box.add(caja_descripcion)
-        contenido_box.add(caja_marca)
-        contenido_box.add(caja_distancialim)
-        contenido_box.add(caja_tiempolim)
-        
-        contenido_box.add(boton_Cargar)
-
-        # Espaciador vertical para empujar la barra inferior hacia abajo
-        espaciador_vertical = toga.Box(style=Pack(flex=1))
-
-        # Barra inferior con botón a la izquierda (por defecto)
-        barra_inferior = toga.Box(
-            style=Pack(direction=ROW)
-        )
-
-        boton_volver = toga.Button(
-            "◀ Volver",
-            on_press=self.volver_pantalla_inicial,
-            style=Pack(margin=10)
-        )
-        barra_inferior.add(boton_volver)
-
-        main_box.add(contenido_box)
-        main_box.add(espaciador_vertical)
-        main_box.add(barra_inferior)
-
-        return main_box
+        volver = volver or (lambda: self.ir_a_pantalla_tres(None, valor))
+        return self._pantalla(contenido_box, self._barra_inferior(izquierda=self._boton_volver(volver)))
 
     def ir_a_pantalla_cinco(self, widget, valor):
-        self.main_window.content = self.construir_pantalla_cinco(valor)
+        self._mostrar(self.construir_pantalla_cinco(valor))
 
     # -------- Pantalla Nueva Límite Alerta --------
     def construir_pantalla_nuevoLimiteAlerta(self, item, componentes=None):
-        main_box = toga.Box(style=Pack(direction=COLUMN, margin=20))
-
-        contenido_box = toga.Box(
-            style=Pack(direction=COLUMN, margin_left=40, align_items='start')
+        tipoAlerta = self._leer_lista(
+            "SELECT DISTINCT tipo_limite FROM LimitesAlerta WHERE tipo_limite IS NOT NULL ORDER BY tipo_limite",
+            por_defecto=["Precio Superior", "Precio Inferior"],
         )
 
-        self.tituloPantallaAlerta = "Añadir Nuevo/s Límites de valor Sup/Inf para Alerta. " + self.label_estado
+        componentes_disponibles = list(componentes or [])
+        if not componentes_disponibles and self.usuarioSeleccionado is not None:
+            componentes_disponibles = self._leer_lista(
+                "SELECT elemento FROM archivoscomponentes WHERE usuario = ? ORDER BY elemento",
+                (self.usuarioSeleccionado,),
+            )
+        if item and item not in componentes_disponibles:
+            componentes_disponibles.insert(0, item)
 
+        self.tituloPantallaAlerta = "Añadir Nuevo/s Límites de valor Sup/Inf para Alerta. " + self.label_estado
         self.label_pantalla_LimiteNuevaAlerta = toga.Label(
             self.tituloPantallaAlerta,
             style=Pack(margin_bottom=20, text_align=CENTER)
         )
-
-        contenido_box.add(self.label_pantalla_LimiteNuevaAlerta)
-
-        # Caja con dropdown "Elemento"
-        tipoAlerta = []
-        try:
-            cursor = self.sqliteConnection.cursor()
-            cursor.execute("SELECT DISTINCT tipo_limite FROM LimitesAlerta WHERE tipo_limite IS NOT NULL ORDER BY tipo_limite")
-            tipoAlerta = [row[0] for row in cursor.fetchall()]
-        except sqlite3.Error as error:
-            logging.error("Error al leer tabla LimitesAlerta %s", error)
-
-        # # Si no hay datos en la tabla LimitesAlerta, usamos una lista por defecto
-        if not tipoAlerta:
-            tipoAlerta = ["Precio Superior", "Precio Inferior"]
-
-        caja_tipoAlerta = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_tipoAlerta = toga.Label(
-            "Tipo Alerta : ",
-            style=Pack(margin_right=10)
-        )
-
-        self.seleccion_tipoAlerta = toga.Selection(
-            items=tipoAlerta,
-            style=Pack(width=250)
-        )
-        self.tipo_limite = self.seleccion_tipoAlerta
-        print("Tipo Límite: ",  self.tipo_limite.value)
-
-        # Caja con label "Descripción" a la izquierda y campo de texto a la derecha
-        caja_valor = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_nombre = toga.Label(
-            "Valor: ",
-            style=Pack(margin_right=10)
-        )
-
-        self.valor_texto = toga.TextInput(
-            placeholder="Escribe valor...",
-            style=Pack(width=250)
-        )
-
-        self.valor_limite = self.valor_texto
-
-        # Caja con label "Marca" a la izquierda y campo de texto a la derecha
-        caja_ticker = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-
-        label_ticker = toga.Label(
-            "Componente: ",
-            style=Pack(margin_right=10)
-        )
-
-        componentes_disponibles = list(componentes or [])
-        if not componentes_disponibles and hasattr(self, "usuarioSeleccionado") and self.usuarioSeleccionado is not None:
-            try:
-                cursor = self.sqliteConnection.cursor()
-                cursor.execute(
-                    "SELECT elemento FROM archivoscomponentes WHERE usuario = ? ORDER BY elemento",
-                    (self.usuarioSeleccionado,),
-                )
-                componentes_disponibles = [row[0] for row in cursor.fetchall()]
-            except sqlite3.Error as error:
-                logging.error("Error al leer componentes para alerta %s", error)
-
-        if item and item not in componentes_disponibles:
-            componentes_disponibles.insert(0, item)
-
-        self.componente_dropdown = toga.Selection(
-            items=componentes_disponibles,
-            style=Pack(width=250)
-        )
+        self.tipo_limite = toga.Selection(items=tipoAlerta, style=Pack(width=ANCHO_CAMPO))
+        self.valor_limite = self._texto("Escribe valor...")
+        self.componente_dropdown = toga.Selection(items=componentes_disponibles, style=Pack(width=ANCHO_CAMPO))
         if item in componentes_disponibles:
             self.componente_dropdown.value = item
 
-        boton_Cargar = toga.Button(
-            "Añadir",
-            on_press=self.cargar_limiteAlerta,
-            style=Pack(margin=10)
-        )
+        contenido_box = self._formulario()
+        contenido_box.add(self.label_pantalla_LimiteNuevaAlerta)
+        contenido_box.add(self._campo("Tipo Alerta : ", self.tipo_limite))
+        contenido_box.add(self._campo("Valor: ", self.valor_limite))
+        contenido_box.add(self._campo("Componente: ", self.componente_dropdown))
+        contenido_box.add(self._boton("Añadir", self.cargar_limiteAlerta))
 
-        caja_tipoAlerta.add(label_tipoAlerta)
-        caja_tipoAlerta.add(self.seleccion_tipoAlerta)
-        caja_valor.add(label_nombre)
-        caja_valor.add(self.valor_texto)
-        caja_ticker.add(label_ticker)
-        caja_ticker.add(self.componente_dropdown)
-
-        contenido_box.add(caja_tipoAlerta)
-        contenido_box.add(caja_valor)
-        contenido_box.add(caja_ticker)
-        
-        contenido_box.add(boton_Cargar)
-
-        # Espaciador vertical para empujar la barra inferior hacia abajo
-        espaciador_vertical = toga.Box(style=Pack(flex=1))
-
-        # Barra inferior con botón a la izquierda (por defecto)
-        barra_inferior = toga.Box(
-            style=Pack(direction=ROW)
-        )
-
-        boton_volver = toga.Button(
-            "◀ Volver",
-            on_press=lambda widget: self.ir_a_pantalla_tres(widget, self.usuarioSeleccionado),
-            style=Pack(margin=10)
-        )
-        barra_inferior.add(boton_volver)
-
-        main_box.add(contenido_box)
-        main_box.add(espaciador_vertical)
-        main_box.add(barra_inferior)
-
-        return main_box
+        volver = self._boton_volver(lambda: self.ir_a_pantalla_tres(None, self.usuarioSeleccionado))
+        return self._pantalla(contenido_box, self._barra_inferior(izquierda=volver))
 
     def PantallaNuevaAlerta(self, item, componentes=None):
-        self.main_window.content = self.construir_pantalla_nuevoLimiteAlerta(item, componentes)
+        self._mostrar(self.construir_pantalla_nuevoLimiteAlerta(item, componentes))
 
     def seleccionarLimitesComponente(self, comp):
         try:
-            cursor = self.sqliteConnection.cursor()
-            cursor.execute(
+            return self.sqliteConnection.execute(
                 "SELECT componente, tipo_limite, valor FROM LimitesAlerta WHERE componente = ?",
                 (comp,),
-            )
-            dataTable = cursor.fetchall()
-            print("Select Resultado: ", dataTable)
-            return dataTable or []
+            ).fetchall()
         except sqlite3.Error as error:
             logging.error("Error al leer límites del Componente %s: %s", comp, error)
-            print("Error al leer límites del Componente %s: %s", comp, error)
             return []
 
     def cargar_limiteAlerta(self, widget=None):
-
+        ok = False
         if not getattr(self.tipo_limite, "value", None):
-            print("User debe rellenar TIPO DE ALERTA")
-            ok = False
+            logging.warning("Falta el TIPO DE ALERTA")
         else:
+            tipo_alerta = 'superior' if self.tipo_limite.value in ('Precio Superior', 'superior') else 'inferior'
+            valor_limite = (self.valor_limite.value or "").strip()
+            compo = (self.componente_dropdown.value or "").strip()
             try:
-                cursor = self.sqliteConnection.cursor()
-
-                valor_limite = (self.valor_limite.value or "").strip()
-                print("Caja seleccion Tipo Límite: ", self.tipo_limite.value)
-                if self.tipo_limite.value == 'Precio Superior': 
-                    tipo_alerta = 'superior'
-                else:
-                    tipo_alerta = 'inferior'
-
-                compo = (self.componente_dropdown.value or "").strip()
-
-                cursor.execute("""
-                    INSERT INTO limitesAlerta (tipo_limite, valor, componente)
+                self.sqliteConnection.execute("""
+                    INSERT INTO LimitesAlerta (tipo_limite, valor, componente)
                     VALUES (?, ?, ?) ON CONFLICT(tipo_limite, componente) DO NOTHING
                 """, (tipo_alerta, valor_limite, compo))
-
                 self.sqliteConnection.commit()
                 ok = True
-
             except sqlite3.Error as error:
                 logging.error("Error al guardar Límite Alerta: %s", error)
-                print("Error al guardar Límite Alerta: %s", error)
-                ok = False
 
-        if ok:
-            self.label_estado = "✅"
-            self.label_pantalla_LimiteNuevaAlerta.text += self.label_estado
-            print("Límite Alerta guardado.")
-            return
-        else:
-            self.label_estado = "❌"
-            self.label_pantalla_LimiteNuevaAlerta.text += self.label_estado
-            print("Error al guardar Límite Alerta")        
+        self.label_estado = "✅" if ok else "❌"
+        self.label_pantalla_LimiteNuevaAlerta.text += self.label_estado
+        return ok
 
     def crearTablaAlertThresholds(self) -> bool:
         try:
-            cursor = self.sqliteConnection.cursor()
-            cursor.execute("""CREATE TABLE IF NOT EXISTS LimitesAlerta (
+            self.sqliteConnection.execute("""CREATE TABLE IF NOT EXISTS LimitesAlerta (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             componente TEXT,
             tipo_limite TEXT,
@@ -1144,21 +818,19 @@ class BikeCompFollowApp(toga.App):
             return True
         except sqlite3.Error as error:
             logging.error("Error en el CREAR la TABLA LimitesAlerta: %s", error)
-            print("Error en el CREAR la TABLA LimitesAlerta: %s", error)
             return False
 
+    # -------- Pantalla de sincronización con Strava --------
     def iniciar_tarea(self, widget):
         self.add_background_task(self.tarea_larga)
         notification.notify(title="Inicio", message="Fin Tareas", app_name="BikeCompFollowApp", app_icon="resources/bici2.icns")
 
     async def tarea_larga(self, widget):
         for i in range(1, self.total + 1):
-            await asyncio.sleep(0.3)   
-            # Actualizar barra
+            await asyncio.sleep(0.3)
             self.progress.value = i
-            # actualizar texto
             self.label.text = f"Procesando {i} de {self.total}"
-    
+
     def recolectarDatosStrava(self, widget):
         datosStrava = stravaConnect.StravaData(self)
         datosStrava.initConexion()
@@ -1166,52 +838,21 @@ class BikeCompFollowApp(toga.App):
         datosStrava.extraerDatos(datetime(2025, 12, 31), datetime.now())
         datosStrava.guardarDatosBDD(datetime.now())
 
-    def ir_a_pantalla_recoleccionDatos(self, widget):
-        self.main_window.content = self.barraProgresoCargaDatos()    
+    def ir_a_pantalla_recoleccionDatos(self, widget=None):
+        self._mostrar(self.barraProgresoCargaDatos())
 
-    def barraProgresoCargaDatos(self):    
-
+    def barraProgresoCargaDatos(self):
         self.total = 20
 
-        # Texto de progreso
-        self.label = toga.Label(
-            "Pulsa Inicio para cargar los datos.",
-            style=Pack(margin=10)
-        )
+        self.label = toga.Label("Pulsa Inicio para cargar los datos.", style=Pack(margin=10))
+        self.progress = toga.ProgressBar(max=self.total, value=0, style=Pack(margin=10))
 
-        # Barra de progreso
-        self.progress = toga.ProgressBar(max=self.total,
-            value=0, style=Pack(margin=10))
-
-        # Botón para iniciar tarea
         box = toga.Box(style=Pack(direction=COLUMN, margin=20))
-
-        # Añadimos los widgets al mismo box
         box.add(self.label)
         box.add(self.progress)
-
-        boton_iniciar = toga.Button("Iniciar", on_press=self.iniciar_tarea, style=Pack(margin=10))
-        box.add(boton_iniciar)
-
-        boton_datos = toga.Button("Extraer Datos Strava", on_press=self.recolectarDatosStrava, style=Pack(margin=10))
-        box.add(boton_datos)
-
-        # Barra inferior con botón a la izquierda (por defecto)
-        barra_inferior = toga.Box(
-            style=Pack(direction=ROW)
-        )
-        boton_volver = toga.Button(
-            "◀ Volver",
-            on_press=self.volver_pantalla_inicial,
-            style=Pack(margin=10)
-        )
-
-        barra_inferior.add(boton_volver)
-        box.add(barra_inferior)
-
-        # self.main_window = toga.MainWindow(title="Ejemplo ProgressBar")
-        # self.main_window.content = box
-        # self.main_window.show()
+        box.add(self._boton("Iniciar", self.iniciar_tarea))
+        box.add(self._boton("Extraer Datos Strava", self.recolectarDatosStrava))
+        box.add(self._barra_inferior(izquierda=self._boton_volver(self.ir_a_menu_usuario)))
         return box
 
 def main():
