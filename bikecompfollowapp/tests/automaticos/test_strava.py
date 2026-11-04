@@ -399,3 +399,21 @@ def test_strava_sync_guarda_actividades_del_usuario(app, db, monkeypatch):
     assert db.execute("SELECT id, tipo_vehiculo, elemento, user FROM ActividadesStrava").fetchall() == [
         (7, "Bici Carretera", "Specialized", "DaMario")
     ]
+
+
+@pytest.mark.parametrize("tipo, vehiculo", [
+    ("Ride", "Bici Gravel"),
+    ("VirtualRide", "Bici Gravel"),
+    ("Run", None),
+    ("Walk", None),
+])
+def test_run_y_walk_sin_tipo_vehiculo(strava_app, db, tipo, vehiculo):
+    strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(1, tipo)])
+    assert db.execute("SELECT tipo, tipo_vehiculo FROM ActividadesStrava").fetchone() == (tipo, vehiculo)
+
+
+def test_resincronizar_run_pone_tipo_vehiculo_a_null(strava_app, db):
+    """Si ya había una carrera guardada con vehículo (carga anterior), al sincronizar queda en NULL."""
+    db.execute("INSERT INTO ActividadesStrava (id, tipo, tipo_vehiculo) VALUES (1, 'Run', 'Bici Gravel')")
+    strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(1, "Run")])
+    assert db.execute("SELECT tipo_vehiculo FROM ActividadesStrava").fetchone() == (None,)

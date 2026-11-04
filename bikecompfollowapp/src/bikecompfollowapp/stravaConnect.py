@@ -59,6 +59,10 @@ SQL_CREAR_ACTIVIDADES = """CREATE TABLE IF NOT EXISTS ActividadesStrava (
 )"""
 
 
+# Actividades sin bici ni otro vehículo: se guardan con tipo_vehiculo = NULL
+TIPOS_SIN_VEHICULO = {"run", "walk"}
+
+
 def _texto(valor):
     """RelaxedActivityType('Ride') -> 'Ride'; None se mantiene."""
     if valor is None:
@@ -506,7 +510,7 @@ class StravaData:
                 _numero(actividad.total_elevation_gain, 1, 1),          # m
                 _numero(actividad.moving_time, 1 / 3600, 3),            # s -> h
                 _numero(actividad.average_speed, 3.6),                  # m/s -> km/h
-                tipo_vehiculo,
+                None if (_texto(actividad.type) or "").lower() in TIPOS_SIN_VEHICULO else tipo_vehiculo,
                 self.nombreEquipo(getattr(actividad, "gear_id", None)),
                 usuario,
             )
