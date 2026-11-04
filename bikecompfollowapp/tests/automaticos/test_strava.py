@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from bikecompfollowapp import stravaConnect
-from bikecompfollowapp.stravaConnect import StravaData
+from bikecompfollowapp.stravaConnect import SQL_CREAR_ACTIVIDADES, StravaData, asegurarTablaActividades
 
 
 @pytest.fixture
@@ -316,9 +316,11 @@ def test_token_vigente_se_copia_a_la_bdd_si_falta(strava, monkeypatch, tmp_path)
 from stravalib.model import SummaryActivity  # noqa: E402
 
 
-def actividad_strava(id_, tipo="Ride", metros=42_195.0, segundos=5400, desnivel=512.3, ms=7.8, gear="b1"):
+def actividad_strava(id_, tipo="Ride", metros=42_195.0, segundos=5400, desnivel=512.3, ms=7.8, gear="b1",
+                     fecha="2026-03-15T23:30:00"):
     return SummaryActivity(id=id_, type=tipo, distance=metros, moving_time=segundos,
-                           total_elevation_gain=desnivel, average_speed=ms, gear_id=gear)
+                           total_elevation_gain=desnivel, average_speed=ms, gear_id=gear,
+                           start_date_local=fecha)
 
 
 @pytest.fixture
@@ -334,13 +336,14 @@ def test_tabla_actividades_strava_columnas(app, tablas):
     assert columnas == {
         "id": "INTEGER", "StravaID": "INTEGER", "tipo": "TEXT", "distancia": "FLOAT", "altimetria": "FLOAT", "duracion": "FLOAT",
         "velocidad_media": "FLOAT", "tipo_vehiculo": "TEXT", "elemento": "TEXT", "user": "TEXT",
+        "fecha": "TEXT",
     }
 
 
 def test_guardar_actividades_con_unidades(strava_app, db):
     assert strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(111)]) == 1
     assert db.execute("SELECT * FROM ActividadesStrava").fetchall() == [
-        (1, 111, "Ride", 42.2, 512.3, 1.5, 28.08, "Bici Gravel", "Bici b1", "DaMario")
+        (1, 111, "Ride", 42.2, 512.3, 1.5, 28.08, "Bici Gravel", "Bici b1", "DaMario", "2026-03-15")
     ]
 
 
@@ -570,3 +573,28 @@ def test_quitar_duplicados_se_ejecuta_tras_la_carga(app, monkeypatch):
     monkeypatch.setattr(StravaData, "quitarActividadesDuplicadas", lambda self: orden.append("duplicados") or 0)
     app._sincronizar_strava(date(2026, 1, 1), "DaMario", None)
     assert orden == ["carga", "duplicados"]
+
+
+# ---- Columna fecha de ActividadesStrava ----
+
+def test_fecha_es_el_dia_local_de_la_actividad(strava_app, db):
+    strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(1, fecha="2026-05-02T00:15:00")])
+    assert db.execute("SELECT fecha FROM ActividadesStrava").fetchone() == ("2026-05-02",)
+
+
+def test_actividad_sin_fecha_no_borra_la_guardada(strava_app, db):
+    strava_app.guardarActividadesBDD("DaMario", None, [actividad_strava(1)])
+    strava_app.guardarActividadesBDD("DaMario", None, [actividad_strava(1, fecha=None)])
+    assert db.execute("SELECT fecha FROM ActividadesStrava").fetchone() == ("2026-03-15",)
+
+
+def test_tabla_sin_fecha_se_migra_y_resincronizar_la_rellena(strava_app, db):
+    conexion = strava_app.sqliteConnection
+    conexion.execute("DROP TABLE ActividadesStrava")
+    conexion.execute(SQL_CREAR_ACTIVIDADES.replace(",\n    fecha TEXT", ""))
+    conexion.execute("INSERT INTO ActividadesStrava (StravaID, tipo, distancia, user) VALUES (7, 'Ride', 10, 'DaMario')")
+    conexion.commit()
+    asegurarTablaActividades(conexion)
+    assert db.execute("SELECT StravaID, distancia, fecha FROM ActividadesStrava").fetchall() == [(7, 10.0, None)]
+    strava_app.guardarActividadesBDD("DaMario", None, [actividad_strava(7, metros=10_000.0)])
+    assert db.execute("SELECT StravaID, fecha FROM ActividadesStrava").fetchall() == [(7, "2026-03-15")]

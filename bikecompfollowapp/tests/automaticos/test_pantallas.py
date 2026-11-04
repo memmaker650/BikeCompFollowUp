@@ -3,11 +3,15 @@
 import pytest
 import toga
 
+from bikecompfollowapp import translations
 from bikecompfollowapp.translations import t
 from bikecompfollowapp.app import (
+    AZUL,
     PANTALLA_MANTENIMIENTO,
     PANTALLAS_MANTENIMIENTO,
     SUBPANTALLAS_MANTENIMIENTO,
+    orden_alfabetico,
+    texto_activo,
 )
 
 USUARIO = "DaMario Bros"
@@ -182,8 +186,9 @@ def test_componente_abre_alta_con_elemento_preseleccionado(en_menu):
     pulsar(en_menu, "Mantenimiento / Paso por taller")
     pantalla = pulsar(en_menu, "Cadena")
 
-    assert f"Añadir Componente: {USUARIO}" in textos_labels(pantalla)
-    # 'Cadena' coincide (sin distinguir mayúsculas) con 'cadena' de la tabla Elemento
+    assert "Añadir Componente" in textos_labels(pantalla)
+    assert f"Añadir Componente: {USUARIO}" not in textos_labels(pantalla)
+    # 'Cadena' coincide (sin distinguir mayúsculas) con 'cadena' de la tabla Componente
     assert en_menu.selection_elemento.value == "cadena"
     assert [fila.value for fila in en_menu.selection_elemento.items].count("cadena") == 1
 
@@ -245,3 +250,194 @@ def test_definicion_subpantallas_coherente():
 
     for clave, (_, _, _, anterior) in PANTALLAS_MANTENIMIENTO.items():
         assert anterior is None or anterior in PANTALLAS_MANTENIMIENTO, clave
+
+
+# ---- Estadísticas: tabla 1 con todos los componentes ----
+
+def _alta(db, elemento, fecha="2026-04-01", activo=1, usuario=USUARIO, descripcion="desc"):
+    db.execute(
+        "INSERT INTO archivoscomponentes (usuario, elemento, descripcion, fechaInsercion, distanciaLimite, "
+        "tiempoLimite, activo) VALUES (?, ?, ?, ?, 5000, 500, ?)",
+        (usuario, elemento, descripcion, fecha, activo),
+    )
+    db.connection.commit()
+
+
+def test_estadisticas_muestra_todos_los_componentes_uno_por_linea(en_menu, db):
+    pulsar(en_menu, "Estadísticas")
+    catalogo = sorted((f[0] for f in db.execute("SELECT nombre FROM Componente")), key=orden_alfabetico)
+    filas = list(en_menu.tabla.data)
+    assert [f.elemento for f in filas] == catalogo
+    assert all(f.descripcion == "POR DEFECTO" and f.distanciaDesdeInsercion == 0 for f in filas), \
+        "Sin altas: componentes POR DEFECTO con 0 km"
+
+
+def test_estadisticas_cruza_las_altas_del_usuario(en_menu, db):
+    _alta(db, "Plato", descripcion="Plato 50")
+    _alta(db, "Cadena", descripcion="KMC")                # 'cadena' en el catálogo: no se duplica
+    _alta(db, "Plato", usuario="Otro", descripcion="ajeno")
+    pulsar(en_menu, "Estadísticas")
+    filas = {f.elemento: f for f in en_menu.tabla.data}
+    assert len(filas) == 10
+    assert filas["Plato"].descripcion == "Plato 50"
+    assert filas["Cadena"].descripcion == "KMC" and "cadena" not in filas
+    assert filas["Cubierta"].descripcion == "POR DEFECTO"
+
+
+def test_estadisticas_varias_altas_muestra_la_activa_mas_reciente(en_menu, db):
+    _alta(db, "Plato", fecha="2026-01-01", descripcion="vieja")
+    _alta(db, "Plato", fecha="2026-03-01", descripcion="nueva")
+    _alta(db, "Plato", fecha="2026-05-01", activo=0, descripcion="desactivada")
+    pulsar(en_menu, "Estadísticas")
+    platos = [f for f in en_menu.tabla.data if f.elemento == "Plato"]
+    assert [f.descripcion for f in platos] == ["nueva"]
+
+
+def test_estadisticas_incluye_componentes_fuera_del_catalogo(en_menu, db):
+    _alta(db, "HORQUILLA")
+    pulsar(en_menu, "Estadísticas")
+    nombres = [f.elemento for f in en_menu.tabla.data]
+    assert "HORQUILLA" in nombres and len(nombres) == 11
+    assert "HORQUILLA" in en_menu.componentes_disponibles
+
+
+def test_estadisticas_orden_alfabetico_ignora_acentos(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    nombres = [f.elemento for f in en_menu.tabla.data]
+    assert nombres.index("Cámara") < nombres.index("Cubierta")
+    assert nombres[0] == "cadena"
+
+
+def test_estadisticas_columna_activo_si_no(en_menu, db):
+    _alta(db, "Plato", activo=1)
+    _alta(db, "HORQUILLA", activo=0)
+    pulsar(en_menu, "Estadísticas")
+    filas = {f.elemento: f.activo for f in en_menu.tabla.data}
+    assert filas["Plato"] == "Sí"
+    assert filas["HORQUILLA"] == "No"
+    assert set(filas.values()) == {"Sí", "No"}
+
+
+@pytest.mark.parametrize("valor, texto", [
+    (1, "Sí"), (0, "No"), (True, "Sí"), (False, "No"), ("1", "Sí"), ("0", "No"),
+    ("True", "Sí"), ("False", "No"), (None, ""),
+])
+def test_texto_activo(valor, texto):
+    assert texto_activo(valor) == texto
+
+
+def test_texto_activo_traducido():
+    translations.set_language("en")
+    assert (texto_activo(1), texto_activo(0)) == ("Yes", "No")
+    translations.set_language("fr")
+    assert (texto_activo(1), texto_activo(0)) == ("Oui", "Non")
+
+
+def test_estadisticas_cabeceras_horas(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    assert [c.heading for c in en_menu.tabla.columns] == [
+        "Componente", "Descripción", "Fecha", "Km máx", "Km desde alta", "Horas máx", "Horas desde alta",
+        "Meses máx", "Meses desde alta", "Activo"]
+    assert "Tiempo" not in [c.heading for c in en_menu.tabla.columns]
+
+
+def test_estadisticas_columna_horas_desde_alta(en_menu, db):
+    _alta(db, "Plato")
+    db.execute("INSERT INTO ActividadesStrava (StravaID, tipo, distancia, duracion, user, fecha) "
+               "VALUES (1, 'Ride', 40, 1.5, ?, '2026-04-02')", (USUARIO,))
+    db.connection.commit()
+    pulsar(en_menu, "Estadísticas")
+    plato = [f for f in en_menu.tabla.data if f.elemento == "Plato"][0]
+    assert (plato.tiempoLimite, plato.horasDesdeInsercion, plato.distanciaDesdeInsercion) == (500, 1.5, 40.0)
+
+
+def test_alta_componente_etiqueta_horas_limite(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    pantalla = pulsar(en_menu, "+ Componente")
+    assert "Horas Límite: " in textos_labels(pantalla)
+
+
+def test_alta_componente_usuario_en_la_linea_siguiente_en_azul(en_menu):
+    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    pantalla = pulsar(en_menu, "Cadena")
+    labels = textos_labels(pantalla)
+    titulo = labels.index("Añadir Componente")
+    assert labels[titulo + 1:titulo + 3] == ["Usuario: ", USUARIO]
+
+    etiqueta, usuario = en_menu.label_usuario_componente, en_menu.label_usuario_seleccionado
+    assert etiqueta.parent is usuario.parent and etiqueta.parent.style.direction == "row"
+    assert etiqueta.parent.children == [etiqueta, usuario]
+    assert str(etiqueta.style.color) == str(AZUL)
+    assert usuario.style.color is None, "Solo el texto 'Usuario:' va en azul"
+
+
+def test_alta_componente_usuario_traducido(en_menu):
+    translations.set_language("fr")
+    pantalla = en_menu.construir_pantalla_cinco(USUARIO)
+    assert ["Ajouter un composant", "Utilisateur : ", USUARIO] == textos_labels(pantalla)[:3]
+
+
+# ---- Límites por defecto en la pantalla de alta de componente ----
+
+def limites_en_pantalla(ui):
+    return ui.distancialim_texto.value, ui.tiempolim_texto.value, ui.meseslim_texto.value
+
+
+@pytest.mark.parametrize("componente, esperado", [
+    ("Cubierta", ("4000", "500", "")),
+    ("cadena", ("2000", "500", "")),
+    ("Líquido Frenos", ("", "", "12")),
+    ("pastillas freno", ("4000", "500", "")),
+    ("Plato", ("5000", "500", "")),
+    ("Cámara", ("5000", "500", "")),
+])
+def test_alta_rellena_limites_por_defecto(en_menu, componente, esperado):
+    en_menu.construir_pantalla_cinco(USUARIO, elemento=componente)
+    assert limites_en_pantalla(en_menu) == esperado
+
+
+@pytest.mark.parametrize("ruta, esperado", [
+    (["Cadena"], ("2000", "500", "")),
+    (["Pastillas freno"], ("4000", "500", "")),
+    (["Cubiertas"], ("4000", "500", "")),
+    (["Otros", "Otros", "Purgado FRENOS"], ("", "", "12")),
+])
+def test_alta_desde_mantenimiento_trae_sus_limites(en_menu, ruta, esperado):
+    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    for texto in ruta:
+        pulsar(en_menu, texto)
+    assert limites_en_pantalla(en_menu) == esperado
+
+
+def test_cambiar_de_componente_cambia_los_limites(en_menu):
+    en_menu.construir_pantalla_cinco(USUARIO, elemento="Plato")
+    en_menu.selection_elemento.value = "cadena"
+    assert limites_en_pantalla(en_menu) == ("2000", "500", "")
+    en_menu.selection_elemento.value = "Líquido Frenos"
+    assert limites_en_pantalla(en_menu) == ("", "", "12")
+
+
+def test_alta_guarda_los_limites_de_los_cuadros(en_menu, db):
+    pantalla = en_menu.construir_pantalla_cinco(USUARIO, elemento="Líquido Frenos")
+    en_menu.meseslim_texto.value = "18"
+    boton(pantalla, "Cargar")._impl.simulate_press()
+    assert db.execute("SELECT elemento, distanciaLimite, tiempoLimite, mesesLimite FROM archivoscomponentes").fetchall() == [
+        ("Líquido Frenos", None, None, 18)]
+
+
+def test_alta_con_cuadros_vacios_usa_los_limites_del_componente(en_menu, db, campo):
+    en_menu.anadirComponente(campo("2026-06-01"), USUARIO, campo("Cadena"), campo(""), campo(""))
+    assert db.execute("SELECT distanciaLimite, tiempoLimite, mesesLimite FROM archivoscomponentes").fetchone() == (
+        2000, 500, None)
+
+
+def test_estadisticas_meses(en_menu, db):
+    from datetime import date
+    hoy = date.today()
+    alta = date(hoy.year - 1, hoy.month, 1)          # día 1 de hace 12 meses: 12 meses completos
+    _alta(db, "Líquido Frenos", fecha=alta.isoformat())
+    db.execute("UPDATE archivoscomponentes SET mesesLimite = 12 WHERE elemento = 'Líquido Frenos'")
+    db.connection.commit()
+    pulsar(en_menu, "Estadísticas")
+    fila = [f for f in en_menu.tabla.data if f.elemento == "Líquido Frenos"][0]
+    assert (fila.mesesLimite, fila.mesesDesdeInsercion) == (12, 12)

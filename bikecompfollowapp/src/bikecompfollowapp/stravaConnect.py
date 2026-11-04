@@ -56,7 +56,8 @@ SQL_CREAR_ACTIVIDADES = """CREATE TABLE IF NOT EXISTS ActividadesStrava (
     velocidad_media FLOAT,
     tipo_vehiculo TEXT,
     elemento TEXT,
-    user TEXT
+    user TEXT,
+    fecha TEXT
 )"""
 
 
@@ -80,6 +81,11 @@ def asegurarTablaActividades(conexion) -> None:
             raise
     else:
         conexion.execute(SQL_CREAR_ACTIVIDADES)
+    columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(ActividadesStrava)")}
+    if "fecha" not in columnas:
+        # Día de la actividad (start_date_local). Las ya cargadas la reciben en el próximo Strava Sync.
+        logging.info("Migrando ActividadesStrava: se añade la columna fecha")
+        conexion.execute("ALTER TABLE ActividadesStrava ADD COLUMN fecha TEXT")
     conexion.commit()
 
 
@@ -99,6 +105,12 @@ def quitarActividadesDuplicadas(conexion) -> int:
 
 # Actividades sin bici ni otro vehículo: se guardan con tipo_vehiculo = NULL
 TIPOS_SIN_VEHICULO = {"run", "walk"}
+
+
+def _fecha_actividad(actividad):
+    """Día de la actividad en hora local ('YYYY-MM-DD'), o None si Strava no la trae."""
+    fecha = getattr(actividad, "start_date_local", None) or getattr(actividad, "start_date", None)
+    return _dia(fecha) if fecha else None
 
 
 def _dia(fecha) -> str:
@@ -589,6 +601,7 @@ class StravaData:
                 None if (_texto(actividad.type) or "").lower() in TIPOS_SIN_VEHICULO else tipo_vehiculo,
                 self.nombreEquipo(getattr(actividad, "gear_id", None)),
                 usuario,
+                _fecha_actividad(actividad),                            # 'YYYY-MM-DD' (hora local)
             ))
             if progreso:
                 progreso(numero, len(actividades))
@@ -596,12 +609,13 @@ class StravaData:
             return 0
         try:
             self.cursor.executemany(
-                f"""INSERT INTO ActividadesStrava (StravaID, {COLUMNAS_DATOS_ACTIVIDADES})
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                f"""INSERT INTO ActividadesStrava (StravaID, {COLUMNAS_DATOS_ACTIVIDADES}, fecha)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(StravaID) DO UPDATE SET
                        tipo = excluded.tipo, distancia = excluded.distancia, altimetria = excluded.altimetria,
                        duracion = excluded.duracion, velocidad_media = excluded.velocidad_media,
-                       tipo_vehiculo = excluded.tipo_vehiculo, elemento = excluded.elemento, user = excluded.user""",
+                       tipo_vehiculo = excluded.tipo_vehiculo, elemento = excluded.elemento, user = excluded.user,
+                       fecha = COALESCE(excluded.fecha, ActividadesStrava.fecha)""",
                 filas,
             )
             self.sqliteConnection.commit()

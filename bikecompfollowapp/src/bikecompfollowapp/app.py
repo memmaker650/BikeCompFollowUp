@@ -11,6 +11,7 @@ from toga.sources import AccessorColumn
 from pathlib import Path
 import sys
 import sqlite3
+import unicodedata
 import logging
 from datetime import date, datetime, time
 
@@ -32,18 +33,161 @@ ESPACIO = 10                 # separación entre botones
 
 DISTANCIA_LIMITE_DEFECTO = 5000
 TIEMPO_LIMITE_DEFECTO = 500
+AZUL = rgb(0, 102, 204)
+
+# Límites por defecto de cada componente: (palabras que debe contener el nombre, sin acentos ni mayúsculas)
+# -> (km, horas, meses). El primero que coincide gana; si ninguno coincide, LIMITES_GENERICOS.
+LIMITES_GENERICOS = (DISTANCIA_LIMITE_DEFECTO, TIEMPO_LIMITE_DEFECTO, None)
+LIMITES_POR_COMPONENTE = [
+    (("liquido", "freno"), (None, None, 12)),     # líquido de frenos: 1 año
+    (("purgado", "freno"), (None, None, 12)),     # purgado de frenos = cambio de líquido
+    (("cubierta",), (4000, TIEMPO_LIMITE_DEFECTO, None)),
+    (("cadena",), (2000, TIEMPO_LIMITE_DEFECTO, None)),
+    (("pastilla",), (4000, TIEMPO_LIMITE_DEFECTO, None)),   # frenos
+]      # texto "Usuario:" de la pantalla de alta de componente
 ELEMENTOS_POR_DEFECTO = ["Cadena", "Pastillas Freno", "Cubiertas"]
 
 # Columnas de las tablas de la pantalla Estadísticas: (clave de traducción de la cabecera, atributo de la fila)
 COLUMNAS_COMPONENTES = [
     ("col.componente", "elemento"), ("col.descripcion", "descripcion"), ("col.fecha", "fechaInsercion"),
     ("col.km_max", "distanciaLimite"), ("col.km_desde_alta", "distanciaDesdeInsercion"),
-    ("col.tiempo", "tiempoLimite"), ("col.activo", "activo"),
+    ("col.horas_max", "tiempoLimite"), ("col.horas_desde_alta", "horasDesdeInsercion"),
+    ("col.meses_max", "mesesLimite"), ("col.meses_desde_alta", "mesesDesdeInsercion"), ("col.activo", "activo"),
 ]
 COLUMNAS_LIMITES = [("col.componente", "componente"), ("col.tipo_limite", "tipo_limite"), ("col.valor", "valor")]
 
 # Tipos de límite tal y como se guardan en LimitesAlerta -> clave del texto que se muestra
 TIPOS_LIMITE = {"superior": "alerta.superior", "inferior": "alerta.inferior"}
+
+
+def orden_alfabetico(texto):
+    """Clave para ordenar sin distinguir mayúsculas ni acentos ('Cámara' va antes que 'Cubierta')."""
+    sin_acentos = unicodedata.normalize("NFKD", texto or "")
+    return "".join(c for c in sin_acentos if not unicodedata.combining(c)).casefold()
+
+
+def limitesPorDefecto(componente):
+    """(km, horas, meses) por defecto para un componente (ver LIMITES_POR_COMPONENTE)."""
+    nombre = orden_alfabetico(componente)
+    for palabras, limites in LIMITES_POR_COMPONENTE:
+        if all(palabra in nombre for palabra in palabras):
+            return limites
+    return LIMITES_GENERICOS
+
+
+# ---- Límites por tipo de bici guardados en la tabla Componente ----
+# Componente.tipo<Bici> = unidad del límite ('km', 'horas' o 'meses'), Componente.limite<Bici> = valor.
+TIPOS_BICI = ("Road", "Gravel", "MTB")
+UNIDADES_LIMITE = ("km", "horas", "meses")
+COLUMNAS_LIMITES_COMPONENTE = {f"{prefijo}{bici}": tipo for bici in TIPOS_BICI
+                               for prefijo, tipo in (("tipo", "TEXT"), ("limite", "FLOAT"))}
+
+
+def tipoBici(vehiculo):
+    """'Bici Gravel' -> 'Gravel', 'Bici MTB'/'Montaña' -> 'MTB'; cualquier otro (o None) -> 'Road'."""
+    nombre = orden_alfabetico(vehiculo)
+    if "gravel" in nombre:
+        return "Gravel"
+    if "mtb" in nombre or "montana" in nombre:
+        return "MTB"
+    return "Road"
+
+
+def limiteUnicoPorDefecto(componente):
+    """(unidad, valor) del límite principal por defecto de un componente: meses si tiene, si no km, si no horas."""
+    km, horas, meses = limitesPorDefecto(componente)
+    if meses is not None:
+        return "meses", meses
+    if km is not None:
+        return "km", km
+    return ("horas", horas) if horas is not None else (None, None)
+
+
+def _entero(valor):
+    return int(valor) if isinstance(valor, float) and valor.is_integer() else valor
+
+
+def limitesDesdeUnidad(unidad, limite):
+    """('km', 4000) -> (4000, 500, None): el límite va a su cuadro; con km se mantienen las horas genéricas."""
+    limite = _entero(limite)
+    unidad = (unidad or "").strip().lower()
+    return (
+        limite if unidad == "km" else None,
+        limite if unidad == "horas" else (TIEMPO_LIMITE_DEFECTO if unidad == "km" else None),
+        limite if unidad == "meses" else None,
+    )
+
+
+def asegurarColumnasComponente(conexion) -> None:
+    """Añade a Componente tipo/limite para Road, Gravel y MTB y rellena las filas que no tengan ninguno
+    con el límite por defecto del componente (el mismo para los tres tipos de bici)."""
+    columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(Componente)")}
+    if not columnas:
+        return
+    for columna, tipo in COLUMNAS_LIMITES_COMPONENTE.items():
+        if columna not in columnas:
+            logging.info("Migrando Componente: se añade la columna %s", columna)
+            conexion.execute(f"ALTER TABLE Componente ADD COLUMN {columna} {tipo}")
+    sin_limites = conexion.execute(
+        "SELECT id, nombre FROM Componente WHERE "
+        + " AND ".join(f"tipo{bici} IS NULL" for bici in TIPOS_BICI)).fetchall()
+    asignaciones = ", ".join(f"tipo{bici} = :tipo, limite{bici} = :limite" for bici in TIPOS_BICI)
+    for id_, nombre in sin_limites:
+        unidad, limite = limiteUnicoPorDefecto(nombre)
+        conexion.execute(f"UPDATE Componente SET {asignaciones} WHERE id = :id",
+                         {"tipo": unidad, "limite": limite, "id": id_})
+    conexion.commit()
+
+
+def vehiculoDeUsuario(conexion, usuario):
+    """Vehículo del usuario (EntradasUsers.tipov guarda el nombre o el id de tipo_vehiculo)."""
+    fila = conexion.execute(
+        """SELECT COALESCE(tv.vehiculo, eu.tipov) FROM EntradasUsers eu
+           LEFT JOIN tipo_vehiculo tv ON tv.id = eu.tipov
+           WHERE eu.usuario = ? ORDER BY eu.id DESC LIMIT 1""",
+        (usuario,),
+    ).fetchone()
+    return None if fila is None or fila[0] is None else str(fila[0])
+
+
+def _regla_limites(nombre):
+    """Índice de la regla de LIMITES_POR_COMPONENTE que corresponde al nombre, o None."""
+    normalizado = orden_alfabetico(nombre)
+    return next((i for i, (palabras, _) in enumerate(LIMITES_POR_COMPONENTE)
+                 if all(palabra in normalizado for palabra in palabras)), None)
+
+
+def limitesComponente(conexion, componente, usuario=None):
+    """(km, horas, meses) por defecto de un componente para la bici del usuario, leídos de la tabla Componente.
+
+    El componente se busca por nombre (sin mayúsculas ni acentos) o, si no está tal cual, por la misma regla de
+    LIMITES_POR_COMPONENTE ('Cubiertas' -> 'Cubierta', 'PASTILLA/S FRENO' -> 'pastillas freno'). Si no está en
+    la tabla o no tiene límite para esa bici, se usan los valores del código (limitesPorDefecto)."""
+    if not componente:
+        return limitesPorDefecto(componente)
+    try:
+        bici = tipoBici(vehiculoDeUsuario(conexion, usuario)) if usuario else "Road"
+        filas = conexion.execute(f"SELECT nombre, tipo{bici}, limite{bici} FROM Componente").fetchall()
+    except sqlite3.Error as error:
+        logging.warning("No se pudieron leer los límites de Componente: %s", error)
+        return limitesPorDefecto(componente)
+    buscado = orden_alfabetico(componente)
+    fila = next((f for f in filas if orden_alfabetico(f[0]) == buscado), None)
+    regla = _regla_limites(componente)
+    if fila is None and regla is not None:
+        fila = next((f for f in filas if _regla_limites(f[0]) == regla), None)
+    if fila is None or not fila[1]:
+        return limitesPorDefecto(componente)
+    return limitesDesdeUnidad(fila[1], fila[2])
+
+
+def texto_activo(valor):
+    """Valor de la columna activo (1/0, True/False...) -> 'Sí' / 'No' en el idioma activo; vacío si no hay."""
+    if valor is None or valor == "":
+        return ""
+    if isinstance(valor, str):
+        valor = valor.strip().lower() not in ("0", "false", "no")
+    return t("comun.si") if valor else t("comun.no")
 
 
 def _columnas(definicion):
@@ -56,6 +200,180 @@ ELEMENTOS_INICIALES = [
     "cadena", "pastillas freno", "Cubierta", "Cinta Manillar", "Piñonera",
     "Plato", "Cambio Trasero", "Líquido Frenos", "Maneta Cambio", "Cámara",
 ]
+
+# Tablas renombradas: nombre antiguo -> nombre nuevo. Al arrancar se renombran conservando sus filas.
+TABLAS_RENOMBRADAS = {"datos": "datosComponente", "Elemento": "Componente"}
+
+# Km acumulados por cada alta de componente (una fila por fila de archivoscomponentes).
+SQL_CREAR_DATOS_COMPONENTE = """CREATE TABLE IF NOT EXISTS datosComponente (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    idComponente INTEGER NOT NULL UNIQUE,
+    usuario TEXT,
+    componente TEXT,
+    fecha TEXT,
+    km FLOAT NOT NULL DEFAULT 0,
+    horas FLOAT NOT NULL DEFAULT 0,
+    num_actividades INTEGER NOT NULL DEFAULT 0,
+    activo BOOLEAN,
+    FOREIGN KEY (idComponente) REFERENCES archivoscomponentes(id))"""
+COLUMNAS_DATOS_COMPONENTE = {"id", "idComponente", "usuario", "componente", "fecha", "km", "horas",
+                             "num_actividades", "activo"}
+# Columnas añadidas después de crear la tabla: se añaden con ALTER TABLE conservando las filas
+COLUMNAS_NUEVAS_DATOS_COMPONENTE = {"horas": "FLOAT NOT NULL DEFAULT 0"}
+
+# Solo cuentan las salidas en bici (ni rodillo, ni carrera, ni caminatas...)
+TIPOS_KM_COMPONENTE = ("Ride",)
+
+# Suma, para cada alta de componente, los km y las horas de uso (duracion) de las actividades del mismo usuario desde su fecha de alta
+# (incluido ese día). fecha = día del cálculo. Las actividades sin fecha no cuentan.
+SQL_CALCULAR_KM_COMPONENTES = """
+INSERT INTO datosComponente (idComponente, usuario, componente, fecha, km, horas, num_actividades, activo)
+SELECT ac.id, ac.usuario, ac.elemento, date('now', 'localtime'),
+       ROUND(COALESCE(SUM(a.distancia), 0), 2), ROUND(COALESCE(SUM(a.duracion), 0), 2), COUNT(a.id), ac.activo
+FROM archivoscomponentes ac
+LEFT JOIN ActividadesStrava a
+       ON a.user = ac.usuario
+      AND a.tipo IN ({tipos})
+      AND a.fecha IS NOT NULL
+      AND a.fecha >= date(ac.fechaInsercion)
+WHERE (:usuario IS NULL OR ac.usuario = :usuario)
+GROUP BY ac.id
+ON CONFLICT(idComponente) DO UPDATE SET
+    usuario = excluded.usuario, componente = excluded.componente, fecha = excluded.fecha,
+    km = excluded.km, horas = excluded.horas, num_actividades = excluded.num_actividades, activo = excluded.activo
+""".format(tipos=", ".join(f"'{tipo}'" for tipo in TIPOS_KM_COMPONENTE))
+
+
+def asegurarTablaDatosComponente(conexion) -> None:
+    """Crea datosComponente. Si existe con otra estructura (la antigua tabla 'datos'): vacía se recrea;
+    con filas se guarda como datosComponente_antigua para no perderlas."""
+    columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(datosComponente)")}
+    if columnas and columnas | COLUMNAS_NUEVAS_DATOS_COMPONENTE.keys() == COLUMNAS_DATOS_COMPONENTE:
+        for columna, definicion in COLUMNAS_NUEVAS_DATOS_COMPONENTE.items():
+            if columna not in columnas:
+                logging.info("Migrando datosComponente: se añade la columna %s", columna)
+                conexion.execute(f"ALTER TABLE datosComponente ADD COLUMN {columna} {definicion}")
+        columnas = COLUMNAS_DATOS_COMPONENTE
+    if columnas and columnas != COLUMNAS_DATOS_COMPONENTE:
+        if conexion.execute("SELECT COUNT(*) FROM datosComponente").fetchone()[0]:
+            logging.warning("datosComponente tenía otra estructura y datos: se guarda como datosComponente_antigua")
+            conexion.execute("ALTER TABLE datosComponente RENAME TO datosComponente_antigua")
+        else:
+            logging.info("datosComponente tenía otra estructura y estaba vacía: se recrea")
+            conexion.execute("DROP TABLE datosComponente")
+    conexion.execute(SQL_CREAR_DATOS_COMPONENTE)
+    conexion.commit()
+
+
+# Componentes del catálogo que el usuario aún no ha definido: se crean con esta descripción para que
+# vayan sumando km. Cuando el usuario da de alta ese componente se actualiza esa misma fila.
+DESCRIPCION_POR_DEFECTO = "POR DEFECTO"
+
+
+def asegurarColumnasArchivosComponentes(conexion) -> None:
+    """Añade a archivoscomponentes las columnas nuevas (mesesLimite) conservando las filas."""
+    columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(archivoscomponentes)")}
+    if columnas and "mesesLimite" not in columnas:
+        logging.info("Migrando archivoscomponentes: se añade la columna mesesLimite")
+        conexion.execute("ALTER TABLE archivoscomponentes ADD COLUMN mesesLimite integer")
+        conexion.commit()
+
+
+def usuariosConNombre(conexion):
+    return [fila[0] for fila in conexion.execute(
+        "SELECT DISTINCT usuario FROM EntradasUsers WHERE trim(COALESCE(usuario, '')) <> '' ORDER BY usuario")]
+
+
+def crearComponentesPorDefecto(conexion, usuario=None) -> int:
+    """Para cada componente de la tabla Componente que el usuario no tenga en archivoscomponentes
+    (sin distinguir mayúsculas), crea uno con descripción POR DEFECTO, fecha de alta FECHA_INICIO_STRAVA
+    y los límites por defecto de ese componente (limitesPorDefecto); a los POR DEFECTO que ya existían les
+    actualiza esos límites. usuario=None lo hace para todos los usuarios. Devuelve cuántos ha creado."""
+    asegurarColumnasArchivosComponentes(conexion)
+    asegurarColumnasComponente(conexion)
+    usuarios = [usuario] if usuario else usuariosConNombre(conexion)
+    creados = 0
+    try:
+        for nombre_usuario in usuarios:
+            faltan = [fila[0] for fila in conexion.execute(
+                """SELECT MIN(c.nombre) FROM Componente c
+                   WHERE trim(COALESCE(c.nombre, '')) <> ''
+                     AND NOT EXISTS (SELECT 1 FROM archivoscomponentes ac
+                                     WHERE ac.usuario = ? AND lower(ac.elemento) = lower(c.nombre))
+                   GROUP BY lower(c.nombre)""", (nombre_usuario,))]
+            conexion.executemany(
+                """INSERT INTO archivoscomponentes (usuario, elemento, descripcion, fechaInsercion,
+                       distanciaLimite, tiempoLimite, mesesLimite, activo) VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
+                [(nombre_usuario, nombre, DESCRIPCION_POR_DEFECTO, FECHA_INICIO_STRAVA.isoformat(),
+                  *limitesComponente(conexion, nombre, nombre_usuario)) for nombre in faltan],
+            )
+            creados += len(faltan)
+            # Los POR DEFECTO aún no los ha definido el usuario: se les ponen los límites por defecto actuales
+            existentes = conexion.execute(
+                "SELECT id, elemento FROM archivoscomponentes WHERE usuario = ? AND descripcion = ?",
+                (nombre_usuario, DESCRIPCION_POR_DEFECTO)).fetchall()
+            conexion.executemany(
+                "UPDATE archivoscomponentes SET distanciaLimite = ?, tiempoLimite = ?, mesesLimite = ? WHERE id = ?",
+                [(*limitesComponente(conexion, elemento, nombre_usuario), id_) for id_, elemento in existentes],
+            )
+        conexion.commit()
+    except sqlite3.Error:
+        conexion.rollback()
+        raise
+    if creados:
+        logging.info("Creados %d componentes POR DEFECTO (%s)", creados, usuario or "todos")
+    return creados
+
+
+def calcularKmComponentes(conexion, usuario=None) -> int:
+    """Suma los km de las actividades Strava (tipo Ride, desde la fecha de alta) a cada componente y lo
+    guarda en datosComponente. usuario=None calcula todos. Devuelve cuántos componentes se han actualizado."""
+    asegurarTablaDatosComponente(conexion)
+    stravaConnect.asegurarTablaActividades(conexion)
+    crearComponentesPorDefecto(conexion, usuario)
+    try:
+        conexion.execute(
+            "DELETE FROM datosComponente WHERE idComponente NOT IN (SELECT id FROM archivoscomponentes)")
+        cursor = conexion.execute(SQL_CALCULAR_KM_COMPONENTES, {"usuario": usuario})
+        conexion.commit()
+    except sqlite3.Error:
+        conexion.rollback()
+        raise
+    logging.info("Km de componentes calculados (%s): %d componentes", usuario or "todos", cursor.rowcount)
+    return cursor.rowcount
+
+
+# Tabla 1 de Estadísticas: todos los componentes del catálogo (tabla Componente), uno por línea, más los
+# que el usuario haya dado de alta con otro nombre. Si el usuario tiene varias altas de un componente se
+# muestra la activa más reciente; si no tiene ninguna, el resto de columnas sale vacío.
+SQL_COMPONENTES_ESTADISTICAS = """
+WITH del_usuario AS (
+    SELECT ac.*, ROW_NUMBER() OVER (
+               PARTITION BY lower(ac.elemento)
+               ORDER BY ac.activo DESC, ac.fechaInsercion DESC, ac.id DESC) AS orden
+    FROM archivoscomponentes ac
+    WHERE ac.usuario = ?
+),
+ultimo AS (SELECT * FROM del_usuario WHERE orden = 1),
+catalogo AS (
+    SELECT nombre FROM Componente WHERE trim(COALESCE(nombre, '')) <> ''
+    UNION
+    SELECT elemento FROM ultimo
+    WHERE lower(elemento) NOT IN (SELECT lower(nombre) FROM Componente WHERE nombre IS NOT NULL)
+)
+SELECT COALESCE(u.elemento, c.nombre), u.descripcion, u.fechaInsercion, u.distanciaLimite,
+       dc.km, u.tiempoLimite, dc.horas, u.mesesLimite,
+       -- meses completos desde el alta hasta hoy
+       CASE WHEN date(u.fechaInsercion) IS NOT NULL THEN
+           (CAST(strftime('%Y', 'now', 'localtime') AS INTEGER) - CAST(strftime('%Y', u.fechaInsercion) AS INTEGER)) * 12
+         + (CAST(strftime('%m', 'now', 'localtime') AS INTEGER) - CAST(strftime('%m', u.fechaInsercion) AS INTEGER))
+         - (CAST(strftime('%d', 'now', 'localtime') AS INTEGER) < CAST(strftime('%d', u.fechaInsercion) AS INTEGER))
+       END,
+       u.activo
+FROM catalogo c
+LEFT JOIN ultimo u ON lower(u.elemento) = lower(c.nombre)
+LEFT JOIN datosComponente dc ON dc.idComponente = u.id
+"""
 
 # ---- Pantallas de mantenimiento ----
 PANTALLA_MANTENIMIENTO = "mantenimiento"
@@ -198,6 +516,7 @@ class BikeCompFollowApp(toga.App):
         self.crearTablaAlertThresholds()
         self.crearTablaAjustes()
         self.crearTablaActividadesStrava()
+        self.crearTablaDatosComponente()
         self.limpiarDuplicadosStrava()
         self.cargarIdioma()
 
@@ -224,13 +543,13 @@ class BikeCompFollowApp(toga.App):
 
     def crearDBBasica(self):
         try:
-            self.cursor.execute("""CREATE TABLE IF NOT EXISTS datos (id integer PRIMARY KEY, fecha Date, datos text NOT NULL, km integer NOT NULL, activo BOOLEAN NOT NULL)""")
-            self.cursor.execute("""CREATE TABLE IF NOT EXISTS Elemento (id INTEGER PRIMARY KEY,nombre TEXT)""")
+            self.cursor.execute("""CREATE TABLE IF NOT EXISTS Componente (id INTEGER PRIMARY KEY,nombre TEXT)""")
+            asegurarTablaDatosComponente(self.sqliteConnection)
             self.cursor.execute("""CREATE TABLE IF NOT EXISTS stravaValores  (id integer PRIMARY KEY,  fecha date not NULL, valor INTEGER not NULL,  ascenso INTEGER, tipo TEXT not null, num_actividades INTEGER, horas INTEGER)""")
             self.cursor.execute("""CREATE TABLE IF NOT EXISTS EntradasUsers (id integer PRIMARY KEY,  fecha Date,  nombre text NOT NULL,  usuario text,  tipov integer NOT NULL, descripcion  TEXT NOT NULL, FOREIGN KEY (tipov) REFERENCES tipo_vehiculo(id))""")
-            self.cursor.execute("""CREATE TABLE IF NOT EXISTS linked_elements (id integer PRIMARY KEY, fecha Date, Entrada_num integer, num_elemento, FOREIGN KEY (Entrada_num) REFERENCES EntradasUsers(id), FOREIGN KEY (num_Elemento) REFERENCES Elemento(id))""")
+            self.cursor.execute("""CREATE TABLE IF NOT EXISTS linked_elements (id integer PRIMARY KEY, fecha Date, Entrada_num integer, num_elemento, FOREIGN KEY (Entrada_num) REFERENCES EntradasUsers(id), FOREIGN KEY (num_Elemento) REFERENCES Componente(id))""")
             self.cursor.execute("""CREATE TABLE IF NOT EXISTS tipo_vehiculo (id	INTEGER PRIMARY KEY,vehiculo TEXT)""")
-            self.cursor.execute("""CREATE TABLE IF NOT EXISTS archivoscomponentes (id INTEGER PRIMARY KEY, usuario NOT NULL, elemento TEXT NOT NULL, descripcion TEXT, marca TEXT, fechaInsercion Date NOT NULL, distanciaLimite integer, tiempoLimite integer, activo BOOLEAN DEFAULT True)""")
+            self.cursor.execute("""CREATE TABLE IF NOT EXISTS archivoscomponentes (id INTEGER PRIMARY KEY, usuario NOT NULL, elemento TEXT NOT NULL, descripcion TEXT, marca TEXT, fechaInsercion Date NOT NULL, distanciaLimite integer, tiempoLimite integer, activo BOOLEAN DEFAULT True, mesesLimite integer)""")
         except sqlite3.Error as error:
             logging.error("Error al crear Tablas en SQLite: %s", error)
             logging.error("Tablas ya existen en SQLite")
@@ -241,11 +560,38 @@ class BikeCompFollowApp(toga.App):
         # Carga de los datos básicos
         try:
             self.cursor.executemany("INSERT INTO tipo_vehiculo (vehiculo) VALUES (?)", [(v,) for v in VEHICULOS_INICIALES])
-            self.cursor.executemany("INSERT INTO Elemento (nombre) VALUES (?)", [(e,) for e in ELEMENTOS_INICIALES])
+            self.cursor.executemany("INSERT INTO Componente (nombre) VALUES (?)", [(e,) for e in ELEMENTOS_INICIALES])
             self.sqliteConnection.commit()
-            logging.info('Carga de datos básicos (tipo_vehiculo, Elemento) correcta.')
+            asegurarColumnasComponente(self.sqliteConnection)
+            logging.info('Carga de datos básicos (tipo_vehiculo, Componente) correcta.')
         except sqlite3.Error as error:
             logging.error("Error al cargar datos de las Tablas Básicas en SQLite: %s", error)
+
+    def renombrarTablasAntiguas(self) -> bool:
+        """Renombra datos -> datosComponente y Elemento -> Componente en una BD existente, sin perder filas.
+
+        SQLite actualiza solo las FOREIGN KEY de otras tablas (linked_elements) que apuntaban al nombre antiguo.
+        """
+        try:
+            # En SQLite los nombres de tabla no distinguen mayúsculas
+            existentes = {fila[0].casefold() for fila in self.sqliteConnection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            for antigua, nueva in TABLAS_RENOMBRADAS.items():
+                if antigua.casefold() not in existentes:
+                    continue
+                if nueva.casefold() in existentes:
+                    if self.sqliteConnection.execute(f'SELECT COUNT(*) FROM "{nueva}"').fetchone()[0]:
+                        logging.warning("Existen %s y %s con datos: no se renombra %s", antigua, nueva, antigua)
+                        continue
+                    self.sqliteConnection.execute(f'DROP TABLE "{nueva}"')   # la nueva estaba vacía
+                self.sqliteConnection.execute(f'ALTER TABLE "{antigua}" RENAME TO "{nueva}"')
+                logging.info("Tabla %s renombrada a %s", antigua, nueva)
+            self.sqliteConnection.commit()
+        except sqlite3.Error as error:
+            self.sqliteConnection.rollback()
+            logging.error("Error al renombrar tablas antiguas: %s", error)
+            return False
+        return True
 
     def arrancarDB(self):
         # Obtener la ruta del directorio actual del script
@@ -257,6 +603,7 @@ class BikeCompFollowApp(toga.App):
         self.cursor = self.sqliteConnection.cursor()
 
         print("DB DIR:", self.db_path)
+        self.renombrarTablasAntiguas()
         
         self.sqliteConnection.commit()
         print("Base de datos lista")
@@ -558,7 +905,7 @@ class BikeCompFollowApp(toga.App):
             por_defecto=["Carretera", "Montaña", "Híbrida"],
         )
         tipos_elemento = self._leer_lista(
-            "SELECT nombre FROM Elemento ORDER BY nombre",
+            "SELECT nombre FROM Componente ORDER BY nombre",
             por_defecto=ELEMENTOS_POR_DEFECTO,
         )
 
@@ -639,11 +986,7 @@ class BikeCompFollowApp(toga.App):
         )
 
         try:
-            data = self.sqliteConnection.execute(
-                "SELECT elemento, descripcion, fechaInsercion, distanciaLimite, 'x', tiempoLimite, activo "
-                "FROM archivoscomponentes WHERE usuario = ?",
-                (valor,),
-            ).fetchall()
+            data = [(*fila[:-1], texto_activo(fila[-1])) for fila in self.componentesEstadisticas(valor)]
             logging.info("Datos de TABLA LEÍDOS correctamente.")
         except sqlite3.Error as error:
             logging.error("Error en el SELECT de la TABLA Comp: %s", error)
@@ -704,6 +1047,31 @@ class BikeCompFollowApp(toga.App):
         ))
         return main_box
 
+    def crearTablaDatosComponente(self) -> bool:
+        try:
+            asegurarColumnasArchivosComponentes(self.sqliteConnection)
+            asegurarColumnasComponente(self.sqliteConnection)
+            asegurarTablaDatosComponente(self.sqliteConnection)
+        except sqlite3.Error as error:
+            logging.error("Error al crear la tabla datosComponente: %s", error)
+            return False
+        return True
+
+    def calcularKmComponentes(self, usuario=None) -> int:
+        """Recalcula los km de cada componente (ver calcularKmComponentes). -1 si hay error."""
+        try:
+            return calcularKmComponentes(self.sqliteConnection, usuario)
+        except sqlite3.Error as error:
+            logging.error("Error al calcular los km de los componentes: %s", error)
+            return -1
+
+    def componentesEstadisticas(self, usuario):
+        """Filas de la tabla 1 de Estadísticas: un componente por línea (ver SQL_COMPONENTES_ESTADISTICAS)."""
+        self.calcularKmComponentes(usuario)   # km al día con las actividades y altas actuales
+        asegurarColumnasArchivosComponentes(self.sqliteConnection)
+        filas = self.sqliteConnection.execute(SQL_COMPONENTES_ESTADISTICAS, (usuario,)).fetchall()
+        return sorted(filas, key=lambda fila: orden_alfabetico(fila[0]))
+
     def ir_a_pantalla_tres(self, widget, valor):
         self._mostrar(self.construir_pantalla_tres(valor))
 
@@ -734,18 +1102,36 @@ class BikeCompFollowApp(toga.App):
         return True
 
     # CREATE TABLE IF NOT EXISTS archivoscomponentes (id INTEGER PRIMARY KEY, usuario NOT NULL, elemento TEXT NOT NULL, descripcion TEXT, marca TEXT, fechaInsercion Date NOT NULL, distanciaLimite integer, tiempoLimite integer, activo BOOLEAN DEFAULT True)
-    def anadirComponente(self, valor1, user, valor2, valor3, valor4, valor5=None, valor6=None):
+    def anadirComponente(self, valor1, user, valor2, valor3, valor4, valor5=None, valor6=None, valor7=None):
+        """valor5/6/7: km, horas y meses límite. Si se dejan vacíos se usan los del componente."""
         logging.info("Dentro añadir Componente.")
 
-        distancia = (getattr(valor5, "value", None) or "").strip() or DISTANCIA_LIMITE_DEFECTO
-        tiempo = (getattr(valor6, "value", None) or "").strip() or TIEMPO_LIMITE_DEFECTO
+        km_defecto, horas_defecto, meses_defecto = limitesComponente(self.sqliteConnection, valor2.value, user)
+        distancia = (getattr(valor5, "value", None) or "").strip() or km_defecto
+        tiempo = (getattr(valor6, "value", None) or "").strip() or horas_defecto
+        meses = (getattr(valor7, "value", None) or "").strip() or meses_defecto
         f = (valor1.value or "").strip() or datetime.today().strftime("%Y-%m-%d")
+        asegurarColumnasArchivosComponentes(self.sqliteConnection)
 
         try:
-            self.sqliteConnection.execute(
-                "INSERT INTO archivoscomponentes (fechaInsercion, usuario, elemento, descripcion, marca, distanciaLimite, tiempoLimite) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (f, user, valor2.value, valor3.value, valor4.value, distancia, tiempo)
-            )
+            # Si el componente existía POR DEFECTO, se le ponen los datos del usuario en vez de duplicarlo
+            por_defecto = self.sqliteConnection.execute(
+                "SELECT id FROM archivoscomponentes WHERE usuario = ? AND lower(elemento) = lower(?) "
+                "AND descripcion = ? ORDER BY id LIMIT 1",
+                (user, valor2.value, DESCRIPCION_POR_DEFECTO),
+            ).fetchone()
+            if por_defecto:
+                self.sqliteConnection.execute(
+                    "UPDATE archivoscomponentes SET fechaInsercion = ?, elemento = ?, descripcion = ?, marca = ?, "
+                    "distanciaLimite = ?, tiempoLimite = ?, mesesLimite = ?, activo = True WHERE id = ?",
+                    (f, valor2.value, valor3.value, valor4.value, distancia, tiempo, meses, por_defecto[0])
+                )
+            else:
+                self.sqliteConnection.execute(
+                    "INSERT INTO archivoscomponentes (fechaInsercion, usuario, elemento, descripcion, marca, "
+                    "distanciaLimite, tiempoLimite, mesesLimite) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (f, user, valor2.value, valor3.value, valor4.value, distancia, tiempo, meses)
+                )
             self.sqliteConnection.commit()
         except sqlite3.Error as error:
             logging.error("Error al insertar en archivoscomponentes: %s", error)
@@ -755,14 +1141,14 @@ class BikeCompFollowApp(toga.App):
         logging.info("Componente cargado correctamente.")
         return True
 
-    def cargar_componente(self, entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto) -> bool:
-        return self.anadirComponente(entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto)
+    def cargar_componente(self, entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto, meseslim_texto=None) -> bool:
+        return self.anadirComponente(entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto, meseslim_texto)
 
     # -------- Pantalla 5 (alta de componente) --------
     def construir_pantalla_cinco(self, valor, elemento=None, volver=None):
         """Alta de componente. `elemento` lo preselecciona; `volver` es la pantalla de retorno."""
         tipos_elemento = self._leer_lista(
-            "SELECT nombre FROM Elemento ORDER BY nombre",
+            "SELECT nombre FROM Componente ORDER BY nombre",
             por_defecto=ELEMENTOS_POR_DEFECTO,
         )
         if elemento:
@@ -773,8 +1159,15 @@ class BikeCompFollowApp(toga.App):
             elemento = coincidencia
 
         self.label_pantalla_dos = toga.Label(
-            t("componente.titulo", usuario=valor),
-            style=Pack(margin_bottom=20, text_align=CENTER)
+            t("componente.titulo"),
+            style=Pack(margin_bottom=10, text_align=CENTER)
+        )
+        # Línea siguiente al título: "Usuario:" en azul y a continuación el usuario seleccionado
+        self.label_usuario_componente = toga.Label(t("componente.usuario"), style=Pack(color=AZUL))
+        self.label_usuario_seleccionado = toga.Label(valor or "")
+        linea_usuario = toga.Box(
+            children=[self.label_usuario_componente, self.label_usuario_seleccionado],
+            style=Pack(direction=ROW, margin_bottom=20),
         )
         self.entrada_fecha = self._texto(t("campo.fecha_placeholder"), value=datetime.today().strftime("%Y-%m-%d"))
         self.selection_elemento = toga.Selection(items=tipos_elemento, style=Pack(width=ANCHO_CAMPO))
@@ -784,22 +1177,37 @@ class BikeCompFollowApp(toga.App):
         self.marca_texto = self._texto()
         self.distancialim_texto = self._texto()
         self.tiempolim_texto = self._texto()
+        self.meseslim_texto = self._texto()
+        self.usuario_alta_componente = valor
+        # Límites por defecto del componente elegido; se rellenan de nuevo al cambiar de componente
+        self.rellenar_limites_por_defecto()
+        self.selection_elemento.on_change = self.rellenar_limites_por_defecto
 
         contenido_box = self._formulario()
         contenido_box.add(self.label_pantalla_dos)
+        contenido_box.add(linea_usuario)
         contenido_box.add(self._campo(t("campo.fecha"), self.entrada_fecha))
         contenido_box.add(self._campo(t("campo.elemento"), self.selection_elemento))
         contenido_box.add(self._campo(t("campo.descripcion"), self.descripcion_texto))
         contenido_box.add(self._campo(t("campo.marca"), self.marca_texto))
         contenido_box.add(self._campo(t("campo.distancia_limite"), self.distancialim_texto))
         contenido_box.add(self._campo(t("campo.tiempo_limite"), self.tiempolim_texto))
+        contenido_box.add(self._campo(t("campo.meses_limite"), self.meseslim_texto))
         contenido_box.add(self._boton(t("comun.cargar"), lambda widget: self.cargar_componente(
             self.entrada_fecha, self.usuarioSeleccionado, self.selection_elemento, self.descripcion_texto,
-            self.marca_texto, self.distancialim_texto, self.tiempolim_texto,
+            self.marca_texto, self.distancialim_texto, self.tiempolim_texto, self.meseslim_texto,
         )))
 
         volver = volver or (lambda: self.ir_a_pantalla_tres(None, valor))
         return self._pantalla(contenido_box, self._barra_inferior(izquierda=self._boton_volver(volver)))
+
+    def rellenar_limites_por_defecto(self, widget=None):
+        """Pone en los cuadros de km, horas y meses límite los valores por defecto del componente elegido."""
+        km, horas, meses = limitesComponente(
+            self.sqliteConnection, self.selection_elemento.value, getattr(self, "usuario_alta_componente", None))
+        self.distancialim_texto.value = "" if km is None else str(km)
+        self.tiempolim_texto.value = "" if horas is None else str(horas)
+        self.meseslim_texto.value = "" if meses is None else str(meses)
 
     def ir_a_pantalla_cinco(self, widget, valor):
         self._mostrar(self.construir_pantalla_cinco(valor))
@@ -901,13 +1309,7 @@ class BikeCompFollowApp(toga.App):
 
     def vehiculoDelUsuario(self, usuario):
         """Vehículo del usuario (EntradasUsers.tipov guarda el nombre o el id de tipo_vehiculo)."""
-        fila = self.cursor.execute(
-            """SELECT COALESCE(tv.vehiculo, eu.tipov) FROM EntradasUsers eu
-               LEFT JOIN tipo_vehiculo tv ON tv.id = eu.tipov
-               WHERE eu.usuario = ? ORDER BY eu.id DESC LIMIT 1""",
-            (usuario,),
-        ).fetchone()
-        return None if fila is None or fila[0] is None else str(fila[0])
+        return vehiculoDeUsuario(self.sqliteConnection, usuario)
 
     def crearTablaAlertThresholds(self) -> bool:
         try:
@@ -946,6 +1348,10 @@ class BikeCompFollowApp(toga.App):
             if datos.actividades and guardadas == 0:
                 raise RuntimeError("No se pudieron guardar las actividades en la base de datos")
             datos.quitarActividadesDuplicadas()   # tras la carga: mismo StravaID y usuario -> se queda el id menor
+            try:
+                calcularKmComponentes(datos.sqliteConnection, usuario)
+            except sqlite3.Error as error:   # los km se recalculan también al abrir Estadísticas
+                logging.error("Error al calcular los km de los componentes tras Strava Sync: %s", error)
             return guardadas
         finally:
             datos.cerrar()

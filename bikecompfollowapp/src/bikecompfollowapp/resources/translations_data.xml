@@ -11,6 +11,8 @@
   <language code="es" name="Castellano" flag="🇪🇸">
     <!-- Comunes -->
     <text key="comun.volver">◀ Volver</text>
+    <text key="comun.si">Sí</text>
+    <text key="comun.no">No</text>
     <text key="comun.cargar">Cargar</text>
     <text key="comun.anadir">Añadir</text>
     <text key="comun.placeholder">Escribe algo...</text>
@@ -32,10 +34,12 @@
     <text key="campo.fecha_placeholder">Fecha instalación</text>
     <text key="campo.marca">Marca Comp: </text>
     <text key="campo.distancia_limite">Distancia Límite: </text>
-    <text key="campo.tiempo_limite">Tiempo Límite: </text>
+    <text key="campo.tiempo_limite">Horas Límite: </text>
+    <text key="campo.meses_limite">Meses Límite: </text>
     <!-- Alta de usuario / componente -->
     <text key="alta.titulo">Nueva Entrada</text>
-    <text key="componente.titulo">Añadir Componente: {usuario}</text>
+    <text key="componente.titulo">Añadir Componente</text>
+    <text key="componente.usuario">Usuario: </text>
     <text key="estado.entrada_ok">Entrada cargada correctamente.</text>
     <text key="estado.entrada_error">Error al cargar la entrada.</text>
     <text key="estado.componente_error">Error al cargar el componente.</text>
@@ -49,7 +53,10 @@
     <text key="col.fecha">Fecha</text>
     <text key="col.km_max">Km máx</text>
     <text key="col.km_desde_alta">Km desde alta</text>
-    <text key="col.tiempo">Tiempo</text>
+    <text key="col.horas_max">Horas máx</text>
+    <text key="col.horas_desde_alta">Horas desde alta</text>
+    <text key="col.meses_max">Meses máx</text>
+    <text key="col.meses_desde_alta">Meses desde alta</text>
     <text key="col.activo">Activo</text>
     <text key="col.tipo_limite">Tipo Límite</text>
     <text key="col.valor">Valor</text>
@@ -121,6 +128,8 @@
 
   <language code="en" name="English" flag="🇬🇧">
     <text key="comun.volver">◀ Back</text>
+    <text key="comun.si">Yes</text>
+    <text key="comun.no">No</text>
     <text key="comun.cargar">Save</text>
     <text key="comun.anadir">Add</text>
     <text key="comun.placeholder">Type something...</text>
@@ -139,9 +148,11 @@
     <text key="campo.fecha_placeholder">Installation date</text>
     <text key="campo.marca">Brand: </text>
     <text key="campo.distancia_limite">Distance limit: </text>
-    <text key="campo.tiempo_limite">Time limit: </text>
+    <text key="campo.tiempo_limite">Hours limit: </text>
+    <text key="campo.meses_limite">Months limit: </text>
     <text key="alta.titulo">New entry</text>
-    <text key="componente.titulo">Add component: {usuario}</text>
+    <text key="componente.titulo">Add component</text>
+    <text key="componente.usuario">User: </text>
     <text key="estado.entrada_ok">Entry saved successfully.</text>
     <text key="estado.entrada_error">Error saving the entry.</text>
     <text key="estado.componente_error">Error saving the component.</text>
@@ -154,7 +165,10 @@
     <text key="col.fecha">Date</text>
     <text key="col.km_max">Max km</text>
     <text key="col.km_desde_alta">Km since added</text>
-    <text key="col.tiempo">Time</text>
+    <text key="col.horas_max">Max hours</text>
+    <text key="col.horas_desde_alta">Hours since added</text>
+    <text key="col.meses_max">Max months</text>
+    <text key="col.meses_desde_alta">Months since added</text>
     <text key="col.activo">Active</text>
     <text key="col.tipo_limite">Limit type</text>
     <text key="col.valor">Value</text>
@@ -221,6 +235,8 @@
 
   <language code="fr" name="Français" flag="🇫🇷">
     <text key="comun.volver">◀ Retour</text>
+    <text key="comun.si">Oui</text>
+    <text key="comun.no">Non</text>
     <text key="comun.cargar">Enregistrer</text>
     <text key="comun.anadir">Ajouter</text>
     <text key="comun.placeholder">Écrivez quelque chose...</text>
@@ -239,9 +255,11 @@
     <text key="campo.fecha_placeholder">Date d'installation</text>
     <text key="campo.marca">Marque : </text>
     <text key="campo.distancia_limite">Limite de distance : </text>
-    <text key="campo.tiempo_limite">Limite de temps : </text>
+    <text key="campo.tiempo_limite">Limite d'heures : </text>
+    <text key="campo.meses_limite">Limite de mois : </text>
     <text key="alta.titulo">Nouvelle entrée</text>
-    <text key="componente.titulo">Ajouter un composant : {usuario}</text>
+    <text key="componente.titulo">Ajouter un composant</text>
+    <text key="componente.usuario">Utilisateur : </text>
     <text key="estado.entrada_ok">Entrée enregistrée avec succès.</text>
     <text key="estado.entrada_error">Erreur lors de l'enregistrement de l'entrée.</text>
     <text key="estado.componente_error">Erreur lors de l'enregistrement du composant.</text>
@@ -254,7 +272,10 @@
     <text key="col.fecha">Date</text>
     <text key="col.km_max">Km max</text>
     <text key="col.km_desde_alta">Km depuis l'ajout</text>
-    <text key="col.tiempo">Temps</text>
+    <text key="col.horas_max">Heures max</text>
+    <text key="col.horas_desde_alta">Heures depuis l'ajout</text>
+    <text key="col.meses_max">Mois max</text>
+    <text key="col.meses_desde_alta">Mois depuis l'ajout</text>
     <text key="col.activo">Actif</text>
     <text key="col.tipo_limite">Type de limite</text>
     <text key="col.valor">Valeur</text>

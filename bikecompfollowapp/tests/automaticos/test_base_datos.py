@@ -5,8 +5,8 @@ import sqlite3
 from bikecompfollowapp.app import AppPaths, BikeCompFollowApp
 
 TABLAS_ESPERADAS = {
-    "datos",
-    "Elemento",
+    "datosComponente",
+    "Componente",
     "stravaValores",
     "EntradasUsers",
     "linked_elements",
@@ -39,7 +39,7 @@ def test_bd_nueva_carga_datos_basicos(db):
     vehiculos = [f[0] for f in db.execute("SELECT vehiculo FROM tipo_vehiculo ORDER BY id")]
     assert vehiculos == ["Coche", "Bici Carretera", "Bici Gravel", "Bici MTB", "Tractor"]
 
-    elementos = {f[0] for f in db.execute("SELECT nombre FROM Elemento")}
+    elementos = {f[0] for f in db.execute("SELECT nombre FROM Componente")}
     assert len(elementos) == 10
     assert {"cadena", "Cubierta", "Cambio Trasero"} <= elementos
 
@@ -49,7 +49,7 @@ def test_datos_basicos_se_guardan_en_disco(app):
     otra = sqlite3.connect(app.db_path)
     try:
         assert otra.execute("SELECT COUNT(*) FROM tipo_vehiculo").fetchone()[0] == 5
-        assert otra.execute("SELECT COUNT(*) FROM Elemento").fetchone()[0] == 10
+        assert otra.execute("SELECT COUNT(*) FROM Componente").fetchone()[0] == 10
     finally:
         otra.close()
 
@@ -59,7 +59,7 @@ def test_rearrancar_no_duplica_datos_basicos(app):
     app.arrancarDB()
     db = app.sqliteConnection
     assert db.execute("SELECT COUNT(*) FROM tipo_vehiculo").fetchone()[0] == 5
-    assert db.execute("SELECT COUNT(*) FROM Elemento").fetchone()[0] == 10
+    assert db.execute("SELECT COUNT(*) FROM Componente").fetchone()[0] == 10
 
 
 def test_bd_existente_no_se_vuelve_a_sembrar(app_paths):
@@ -122,8 +122,21 @@ def test_columnas_archivoscomponentes(db):
     columnas = [f[1] for f in db.execute("PRAGMA table_info(archivoscomponentes)")]
     assert columnas == [
         "id", "usuario", "elemento", "descripcion", "marca",
-        "fechaInsercion", "distanciaLimite", "tiempoLimite", "activo",
+        "fechaInsercion", "distanciaLimite", "tiempoLimite", "activo", "mesesLimite",
     ]
+
+
+def test_archivoscomponentes_sin_meses_se_migra_conservando_filas(app, db):
+    from bikecompfollowapp.app import asegurarColumnasArchivosComponentes
+    con = app.sqliteConnection
+    con.execute("DROP TABLE archivoscomponentes")
+    con.execute("CREATE TABLE archivoscomponentes (id INTEGER PRIMARY KEY, usuario NOT NULL, elemento TEXT NOT NULL, "
+                "descripcion TEXT, marca TEXT, fechaInsercion Date NOT NULL, distanciaLimite integer, "
+                "tiempoLimite integer, activo BOOLEAN DEFAULT True)")
+    con.execute("INSERT INTO archivoscomponentes (usuario, elemento, fechaInsercion) VALUES ('u', 'Plato', '2026-01-01')")
+    asegurarColumnasArchivosComponentes(con)
+    asegurarColumnasArchivosComponentes(con)          # idempotente
+    assert db.execute("SELECT elemento, mesesLimite FROM archivoscomponentes").fetchall() == [("Plato", None)]
 
 
 def test_cerrar_db(app):
@@ -135,3 +148,69 @@ def test_cerrar_db(app):
         pass
     # La fixture vuelve a cerrar; reabrimos para que no falle.
     app.sqliteConnection = sqlite3.connect(app.db_path)
+
+
+# ---- Renombrado datos -> datosComponente y Elemento -> Componente ----
+
+def _bd_con_tablas_antiguas(ruta):
+    con = sqlite3.connect(ruta)
+    con.execute(
+        "CREATE TABLE EntradasUsers (id integer PRIMARY KEY, fecha Date, nombre text NOT NULL, "
+        "usuario text, tipov integer NOT NULL, descripcion TEXT NOT NULL)"
+    )
+    con.execute("CREATE TABLE datos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, fecha TEXT, activo BOOLEAN)")
+    con.execute("INSERT INTO datos (nombre, fecha, activo) VALUES ('dato', '2026-01-01', 1)")
+    con.execute("CREATE TABLE Elemento (id INTEGER PRIMARY KEY, nombre TEXT)")
+    con.executemany("INSERT INTO Elemento (nombre) VALUES (?)", [("cadena",), ("Plato",), ("Mi pieza",)])
+    con.execute(
+        "CREATE TABLE linked_elements (id integer PRIMARY KEY, fecha Date, Entrada_num integer, num_elemento, "
+        "FOREIGN KEY (num_Elemento) REFERENCES Elemento(id))"
+    )
+    con.commit()
+    con.close()
+
+
+def test_bd_existente_renombra_tablas_conservando_filas(app_paths, tablas):
+    ruta = AppPaths.get("data", "BikeCFU", "dbbcfu.db")
+    _bd_con_tablas_antiguas(ruta)
+
+    instancia = object.__new__(BikeCompFollowApp)
+    instancia.arrancarDB()
+    try:
+        db = instancia.sqliteConnection
+        nombres = tablas(db)
+        assert {"datosComponente", "Componente"} <= nombres
+        assert not {"datos", "Elemento"} & nombres
+        assert [f[0] for f in db.execute("SELECT nombre FROM Componente ORDER BY id")] == ["cadena", "Plato", "Mi pieza"]
+        assert db.execute("SELECT nombre, fecha, activo FROM datosComponente").fetchall() == [("dato", "2026-01-01", 1)]
+        sql = db.execute("SELECT sql FROM sqlite_master WHERE name = 'linked_elements'").fetchone()[0]
+        assert "Componente" in sql and "Elemento(" not in sql, "La FOREIGN KEY debe apuntar a Componente"
+    finally:
+        instancia.sqliteConnection.close()
+
+
+def test_renombrar_es_idempotente(app):
+    assert app.renombrarTablasAntiguas() is True
+    assert app.renombrarTablasAntiguas() is True
+    assert app.sqliteConnection.execute("SELECT COUNT(*) FROM Componente").fetchone()[0] == 10
+
+
+def test_renombrar_si_la_tabla_nueva_esta_vacia(app, tablas):
+    db = app.sqliteConnection
+    db.execute("DELETE FROM Componente")
+    db.execute("CREATE TABLE Elemento (id INTEGER PRIMARY KEY, nombre TEXT)")
+    db.execute("INSERT INTO Elemento (nombre) VALUES ('antiguo')")
+    db.commit()
+    assert app.renombrarTablasAntiguas() is True
+    assert "Elemento" not in tablas(db)
+    assert db.execute("SELECT nombre FROM Componente").fetchall() == [("antiguo",)]
+
+
+def test_renombrar_no_pisa_una_tabla_nueva_con_datos(app, tablas):
+    db = app.sqliteConnection
+    db.execute("CREATE TABLE Elemento (id INTEGER PRIMARY KEY, nombre TEXT)")
+    db.execute("INSERT INTO Elemento (nombre) VALUES ('antiguo')")
+    db.commit()
+    assert app.renombrarTablasAntiguas() is True
+    assert "Elemento" in tablas(db), "Se deja la antigua para no perder datos"
+    assert db.execute("SELECT COUNT(*) FROM Componente").fetchone()[0] == 10
