@@ -192,6 +192,7 @@ class BikeCompFollowApp(toga.App):
         self.arrancarDB()
         self.crearTablaAlertThresholds()
         self.crearTablaAjustes()
+        self.crearTablaActividadesStrava()
         self.cargarIdioma()
 
         # Pantalla inicial al arrancar
@@ -875,6 +876,25 @@ class BikeCompFollowApp(toga.App):
         self.label_pantalla_LimiteNuevaAlerta.text += self.label_estado
         return ok
 
+    def crearTablaActividadesStrava(self) -> bool:
+        try:
+            self.sqliteConnection.execute(stravaConnect.SQL_CREAR_ACTIVIDADES)
+            self.sqliteConnection.commit()
+            return True
+        except sqlite3.Error as error:
+            logging.error("Error al crear la tabla ActividadesStrava: %s", error)
+            return False
+
+    def vehiculoDelUsuario(self, usuario):
+        """Vehículo del usuario (EntradasUsers.tipov guarda el nombre o el id de tipo_vehiculo)."""
+        fila = self.cursor.execute(
+            """SELECT COALESCE(tv.vehiculo, eu.tipov) FROM EntradasUsers eu
+               LEFT JOIN tipo_vehiculo tv ON tv.id = eu.tipov
+               WHERE eu.usuario = ? ORDER BY eu.id DESC LIMIT 1""",
+            (usuario,),
+        ).fetchone()
+        return None if fila is None or fila[0] is None else str(fila[0])
+
     def crearTablaAlertThresholds(self) -> bool:
         try:
             self.sqliteConnection.execute("""CREATE TABLE IF NOT EXISTS LimitesAlerta (
@@ -911,6 +931,7 @@ class BikeCompFollowApp(toga.App):
         datosStrava.crearObjetoCliente()
         datosStrava.extraerDatos(datetime(2025, 12, 31), datetime.now())
         datosStrava.guardarDatosBDD(datetime.now())
+        datosStrava.guardarActividadesBDD(self.usuarioSeleccionado, self.vehiculoDelUsuario(self.usuarioSeleccionado))
 
     def ir_a_pantalla_recoleccionDatos(self, widget=None):
         self._mostrar(self.barraProgresoCargaDatos())

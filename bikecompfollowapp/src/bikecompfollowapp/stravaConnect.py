@@ -43,6 +43,33 @@ class OAuthHandler(BaseHTTPRequestHandler):
             self.send_response(400)
             self.end_headers()
 
+# Una fila por actividad de Strava. id = id de la actividad en Strava (así no se duplica al
+# sincronizar otra vez). Unidades: distancia km, altimetria m, duracion horas (tiempo en
+# movimiento), velocidad_media km/h.
+SQL_CREAR_ACTIVIDADES = """CREATE TABLE IF NOT EXISTS ActividadesStrava (
+    id INTEGER PRIMARY KEY,
+    tipo TEXT,
+    distancia FLOAT,
+    altimetria FLOAT,
+    duracion FLOAT,
+    velocidad_media FLOAT,
+    tipo_vehiculo TEXT,
+    elemento TEXT,
+    user TEXT
+)"""
+
+
+def _texto(valor):
+    """RelaxedActivityType('Ride') -> 'Ride'; None se mantiene."""
+    if valor is None:
+        return None
+    return str(getattr(valor, "root", valor))
+
+
+def _numero(valor, factor=1.0, decimales=2):
+    return None if valor is None else round(float(valor) * factor, decimales)
+
+
 class StravaData:
     contador = 0
     contador2 = 0
@@ -68,14 +95,22 @@ class StravaData:
         self.app = app
         self.contador = 0
         self.contador2 = 0
+        self.actividades = []
+        self._equipos = {}   # gear_id -> nombre, para no consultar Strava en cada actividad
 
         # Misma BD que la app (BikeCFU/dbbcfu.db). Antes se abría paths.data/dbbcfu.db, otro
         # fichero distinto: SQLite lo creaba vacío y fallaba con "no such table: stravaValores".
-        file_pathDB = getattr(app, "db_path", None) or Path(app.paths.data) / "BikeCFU" / "dbbcfu.db"
-        Path(file_pathDB).parent.mkdir(parents=True, exist_ok=True)
-        self.sqliteConnection = sqlite3.connect(file_pathDB)
+        # Si la app ya tiene la BD abierta se reutiliza su conexión: con una segunda conexión al
+        # mismo fichero, cualquier cambio sin confirmar de la app provoca "database is locked".
+        conexion = getattr(app, "sqliteConnection", None)
+        if isinstance(conexion, sqlite3.Connection):
+            self.sqliteConnection = conexion
+        else:
+            file_pathDB = getattr(app, "db_path", None) or Path(app.paths.data) / "BikeCFU" / "dbbcfu.db"
+            Path(file_pathDB).parent.mkdir(parents=True, exist_ok=True)
+            self.sqliteConnection = sqlite3.connect(file_pathDB)
+            logging.info("Successfully Connected to SQLite: %s", file_pathDB)
         self.cursor = self.sqliteConnection.cursor()
-        logging.info("Successfully Connected to SQLite: %s", file_pathDB)
 
     # Open the secrets file and store the client ID and client secret as objects, separated by a comma
     # Read below to learn how to set up the app that provides you with the client ID
@@ -409,9 +444,11 @@ class StravaData:
         self.total_desnivel2 = 0
         self.contador = 0
         self.contador2 = 0
+        self.actividades = []   # todas las descargadas, para ActividadesStrava
 
         for actividad in self.client.get_activities(after=self.fecha_referencia, before=self.fecha_objetivo):
-            if actividad.type == tipoActividad: 
+            self.actividades.append(actividad)
+            if actividad.type == tipoActividad:
                 self.total_distancia += actividad.distance  # metros
                 self.total_tiempo += actividad.moving_time
                 self.total_desnivel += actividad.total_elevation_gain
@@ -435,6 +472,67 @@ class StravaData:
         print("Distancia (km):", math.trunc(self.total_distancia  / 1000))
         print("Tiempo (horas):", math.trunc(self.total_tiempo / 3600))
         print("Desnivel (m):", math.trunc(self.total_desnivel))
+
+    def crearTablaActividades(self) -> bool:
+        try:
+            self.cursor.execute(SQL_CREAR_ACTIVIDADES)
+            self.sqliteConnection.commit()
+            return True
+        except sqlite3.Error as error:
+            logging.error("Error al crear la tabla ActividadesStrava: %s", error)
+            return False
+
+    def nombreEquipo(self, gear_id):
+        """Nombre de la bici/equipo de Strava (se consulta una vez por gear_id). Si falla, el propio id."""
+        if not gear_id:
+            return None
+        cache = self._equipos
+        if gear_id not in cache:
+            try:
+                cache[gear_id] = self.client.get_gear(gear_id).name or gear_id
+            except Exception as error:   # red, permisos o equipo borrado: no debe parar la carga
+                logging.warning("No se pudo obtener el equipo %s de Strava: %s", gear_id, error)
+                cache[gear_id] = gear_id
+        return cache[gear_id]
+
+    def guardarActividadesBDD(self, usuario, tipo_vehiculo=None, actividades=None) -> int:
+        """Guarda (o actualiza si ya existían) las actividades en ActividadesStrava. Devuelve cuántas."""
+        actividades = self.actividades if actividades is None else actividades
+        filas = [
+            (
+                actividad.id,
+                _texto(actividad.type),
+                _numero(actividad.distance, 1 / 1000),                  # m -> km
+                _numero(actividad.total_elevation_gain, 1, 1),          # m
+                _numero(actividad.moving_time, 1 / 3600, 3),            # s -> h
+                _numero(actividad.average_speed, 3.6),                  # m/s -> km/h
+                tipo_vehiculo,
+                self.nombreEquipo(getattr(actividad, "gear_id", None)),
+                usuario,
+            )
+            for actividad in actividades
+            if actividad.id is not None
+        ]
+        if not self.crearTablaActividades():
+            return 0
+        try:
+            self.cursor.executemany(
+                """INSERT INTO ActividadesStrava
+                       (id, tipo, distancia, altimetria, duracion, velocidad_media, tipo_vehiculo, elemento, user)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       tipo = excluded.tipo, distancia = excluded.distancia, altimetria = excluded.altimetria,
+                       duracion = excluded.duracion, velocidad_media = excluded.velocidad_media,
+                       tipo_vehiculo = excluded.tipo_vehiculo, elemento = excluded.elemento, user = excluded.user""",
+                filas,
+            )
+            self.sqliteConnection.commit()
+        except sqlite3.Error as error:
+            self.sqliteConnection.rollback()
+            logging.error("Error al guardar en ActividadesStrava: %s", error)
+            return 0
+        logging.info("Guardadas %d actividades de Strava de %s", len(filas), usuario)
+        return len(filas)
 
     def guardarDatosBDD(self, fecha):
         # Meter los datos extraídos en base de datos.

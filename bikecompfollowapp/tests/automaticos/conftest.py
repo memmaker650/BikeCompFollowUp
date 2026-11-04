@@ -64,6 +64,7 @@ def app(app_paths):
     instancia.arrancarDB()
     instancia.crearTablaAlertThresholds()
     instancia.crearTablaAjustes()
+    instancia.crearTablaActividadesStrava()
     instancia.cargarIdioma()
     yield instancia
     instancia.sqliteConnection.close()

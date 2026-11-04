@@ -167,13 +167,11 @@ def test_chequear_datos_bdd_usa_bd_de_la_app(strava, monkeypatch, tmp_path):
 def test_strava_usa_la_misma_bd_que_la_app(app, db):
     """Regresión: StravaData abría paths.data/dbbcfu.db en vez de BikeCFU/dbbcfu.db -> 'no such table'."""
     datos = StravaData(app)
-    try:
-        datos.total_distancia, datos.total_desnivel, datos.total_tiempo, datos.total_actividades = 12_000, 200, 3600, 1
-        datos.guardarDatosBDD("2026-10-01")
-        assert db.execute("SELECT fecha, valor FROM stravaValores").fetchall() == [("2026-10-01", 12)]
-        assert datos.chequearDatosBDD("2026-10-01") is True
-    finally:
-        datos.sqliteConnection.close()
+    assert datos.sqliteConnection is app.sqliteConnection
+    datos.total_distancia, datos.total_desnivel, datos.total_tiempo, datos.total_actividades = 12_000, 200, 3600, 1
+    datos.guardarDatosBDD("2026-10-01")
+    assert db.execute("SELECT fecha, valor FROM stravaValores").fetchall() == [("2026-10-01", 12)]
+    assert datos.chequearDatosBDD("2026-10-01") is True
 
 
 def test_strava_sin_db_path_usa_carpeta_bikecfu(tmp_path):
@@ -310,3 +308,94 @@ def test_token_vigente_se_copia_a_la_bdd_si_falta(strava, monkeypatch, tmp_path)
     monkeypatch.setattr(strava, "refresh_token", lambda *a: pytest.fail("No debería refrescar"))
     assert strava.get_valid_token() == "a"
     assert strava.recuperarTokenBDD() == "vigente"
+
+
+# ---- Tabla ActividadesStrava ----
+
+from stravalib.model import SummaryActivity  # noqa: E402
+
+
+def actividad_strava(id_, tipo="Ride", metros=42_195.0, segundos=5400, desnivel=512.3, ms=7.8, gear="b1"):
+    return SummaryActivity(id=id_, type=tipo, distance=metros, moving_time=segundos,
+                           total_elevation_gain=desnivel, average_speed=ms, gear_id=gear)
+
+
+@pytest.fixture
+def strava_app(app):
+    datos = StravaData(app)
+    datos.client = SimpleNamespace(get_gear=lambda gid: SimpleNamespace(name=f"Bici {gid}"))
+    return datos   # comparte la conexión de la app; la cierra el fixture app
+
+
+def test_tabla_actividades_strava_columnas(app, tablas):
+    assert "ActividadesStrava" in tablas(app.sqliteConnection)
+    columnas = {fila[1]: fila[2] for fila in app.sqliteConnection.execute("PRAGMA table_info(ActividadesStrava)")}
+    assert columnas == {
+        "id": "INTEGER", "tipo": "TEXT", "distancia": "FLOAT", "altimetria": "FLOAT", "duracion": "FLOAT",
+        "velocidad_media": "FLOAT", "tipo_vehiculo": "TEXT", "elemento": "TEXT", "user": "TEXT",
+    }
+
+
+def test_guardar_actividades_con_unidades(strava_app, db):
+    assert strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(111)]) == 1
+    assert db.execute("SELECT * FROM ActividadesStrava").fetchall() == [
+        (111, "Ride", 42.2, 512.3, 1.5, 28.08, "Bici Gravel", "Bici b1", "DaMario")
+    ]
+
+
+def test_sincronizar_otra_vez_no_duplica_y_actualiza(strava_app, db):
+    strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(111), actividad_strava(222, "Run")])
+    strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(111, metros=50_000.0)])
+    assert db.execute("SELECT id, tipo, distancia FROM ActividadesStrava ORDER BY id").fetchall() == [
+        (111, "Ride", 50.0), (222, "Run", 42.2)
+    ]
+
+
+def test_equipo_se_consulta_una_vez_y_falla_sin_romper(strava_app, db):
+    pedidos = []
+
+    def get_gear(gid):
+        pedidos.append(gid)
+        if gid == "roto":
+            raise RuntimeError("404")
+        return SimpleNamespace(name="Canyon")
+
+    strava_app.client = SimpleNamespace(get_gear=get_gear)
+    strava_app.guardarActividadesBDD("u", None, [actividad_strava(1), actividad_strava(2), actividad_strava(3, gear="roto"),
+                                                 actividad_strava(4, gear=None)])
+    assert pedidos == ["b1", "roto"]
+    assert db.execute("SELECT id, elemento FROM ActividadesStrava ORDER BY id").fetchall() == [
+        (1, "Canyon"), (2, "Canyon"), (3, "roto"), (4, None)
+    ]
+
+
+def test_extraer_datos_guarda_todas_las_actividades_y_totaliza_solo_ride(strava_app, db):
+    acts = [actividad_strava(1, "Ride", 20_000.0), actividad_strava(2, "Run", 5_000.0)]
+    strava_app.client.get_activities = lambda after, before: acts
+    strava_app.extraerDatos(datetime(2026, 9, 1), datetime(2026, 10, 1))
+    assert strava_app.total_distancia == 20_000
+    assert strava_app.guardarActividadesBDD("u") == 2
+    assert db.execute("SELECT COUNT(*) FROM ActividadesStrava").fetchone() == (2,)
+
+
+@pytest.mark.parametrize("tipov, esperado", [("Bici Gravel", "Bici Gravel"), (4, "Bici MTB")])
+def test_vehiculo_del_usuario(app, db, tipov, esperado):
+    db.execute("INSERT INTO EntradasUsers (nombre, usuario, tipov, descripcion) VALUES ('N', 'DaMario', ?, '')", (tipov,))
+    assert app.vehiculoDelUsuario("DaMario") == esperado
+    assert app.vehiculoDelUsuario("nadie") is None
+
+
+def test_strava_sync_guarda_actividades_del_usuario(app, db, monkeypatch):
+    db.execute("INSERT INTO EntradasUsers (nombre, usuario, tipov, descripcion) VALUES ('N', 'DaMario', 'Bici Carretera', '')")
+    app.usuarioSeleccionado = "DaMario"
+    monkeypatch.setattr(StravaData, "initConexion", lambda self: None)
+
+    def cliente(self):
+        self.client = SimpleNamespace(get_activities=lambda after, before: [actividad_strava(7)],
+                                      get_gear=lambda gid: SimpleNamespace(name="Specialized"))
+
+    monkeypatch.setattr(StravaData, "crearObjetoCliente", cliente)
+    app.recolectarDatosStrava(None)
+    assert db.execute("SELECT id, tipo_vehiculo, elemento, user FROM ActividadesStrava").fetchall() == [
+        (7, "Bici Carretera", "Specialized", "DaMario")
+    ]
