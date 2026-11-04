@@ -441,3 +441,54 @@ def test_estadisticas_meses(en_menu, db):
     pulsar(en_menu, "Estadísticas")
     fila = [f for f in en_menu.tabla.data if f.elemento == "Líquido Frenos"][0]
     assert (fila.mesesLimite, fila.mesesDesdeInsercion) == (12, 12)
+
+
+# ---- Ventana de Alerta al cargar el menú del usuario ----
+
+@pytest.fixture
+def dialogos(con_usuario, monkeypatch):
+    abiertos = []
+    monkeypatch.setattr(type(con_usuario), "_abrir_dialogo", lambda self, dialogo: abiertos.append(dialogo))
+    return abiertos
+
+
+def test_menu_abre_alerta_con_componentes_urgentes(con_usuario, dialogos):
+    pulsar(con_usuario, f"{USUARIO}-Damián Vega")
+    assert len(dialogos) == 1
+    assert dialogos[0].titulo == "Alerta"
+    assert dialogos[0].mensaje.splitlines() == [
+        "Componentes a cambiar de manera urgente :", "", "• Cadena", "• Pastillas de Freno"]
+
+
+def test_alerta_se_muestra_tambien_al_volver_al_menu(con_usuario, dialogos):
+    pulsar(con_usuario, f"{USUARIO}-Damián Vega")
+    pulsar(con_usuario, "Estadísticas")
+    pulsar(con_usuario, "◀ Volver")
+    assert len(dialogos) == 2
+
+
+def test_sin_componentes_urgentes_no_hay_alerta(con_usuario, dialogos, monkeypatch):
+    monkeypatch.setattr(type(con_usuario), "componentesUrgentes", lambda self, usuario: [])
+    pulsar(con_usuario, f"{USUARIO}-Damián Vega")
+    assert dialogos == []
+
+
+def test_alerta_traducida(con_usuario, dialogos):
+    translations.set_language("en")
+    con_usuario.ir_a_menu_usuario(None, USUARIO)
+    assert dialogos[0].titulo == "Alert"
+    assert dialogos[0].mensaje.startswith("Components to replace urgently:")
+
+
+def test_abrir_dialogo_sin_bucle_no_rompe(en_menu):
+    assert en_menu._abrir_dialogo(toga.InfoDialog("t", "m")) is None
+
+
+def test_pintar_fondo_boton_solo_en_cocoa(en_menu):
+    from toga.colors import color as parse_color
+
+    from bikecompfollowapp.app import pintar_fondo_boton
+    # backend de pruebas (toga_dummy): no se toca nada, se queda el background_color de Pack
+    assert pintar_fondo_boton(en_menu.boton_estadisticas, "#FF8C00") is False
+    assert en_menu.boton_estadisticas.style.background_color == parse_color("#FF8C00")
+    assert en_menu.boton_mantenimiento.style.background_color == parse_color("#1E64C8")

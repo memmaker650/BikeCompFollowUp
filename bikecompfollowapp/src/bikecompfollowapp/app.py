@@ -5,7 +5,7 @@ App to follow up bike comp, sneakers and car comp to avoid breaks.
 import toga
 from toga.style import Pack
 from toga.style.pack import CENTER, COLUMN, ROW, LEFT
-from toga.colors import rgb
+from toga.colors import color as parse_color, rgb
 from toga.sources import AccessorColumn
 
 from pathlib import Path
@@ -34,6 +34,11 @@ ESPACIO = 10                 # separación entre botones
 DISTANCIA_LIMITE_DEFECTO = 5000
 TIEMPO_LIMITE_DEFECTO = 500
 AZUL = rgb(0, 102, 204)
+COLOR_ESTADISTICAS = "#FF8C00"
+COLOR_MANTENIMIENTO = "#1E64C8"
+
+# Componentes de prueba para la ventana de Alerta del menú del usuario (ver componentesUrgentes)
+COMPONENTES_URGENTES_PRUEBA = ["Cadena", "Pastillas de Freno"]
 
 # Límites por defecto de cada componente: (palabras que debe contener el nombre, sin acentos ni mayúsculas)
 # -> (km, horas, meses). El primero que coincide gana; si ninguno coincide, LIMITES_GENERICOS.
@@ -188,6 +193,27 @@ def texto_activo(valor):
     if isinstance(valor, str):
         valor = valor.strip().lower() not in ("0", "false", "no")
     return t("comun.si") if valor else t("comun.no")
+
+
+def pintar_fondo_boton(boton, color_hex):
+    """En macOS, Toga colorea los botones con bezelColor, que macOS solo pinta mientras la app es la activa
+    (si el foco está en otra app, p. ej. PyCharm, salen blancos). Se pinta el fondo en la capa del botón,
+    que se ve siempre. En el resto de backends no hace nada: basta con background_color de Pack."""
+    nativo = getattr(getattr(boton, "_impl", None), "native", None)
+    if nativo is None or not type(boton._impl).__module__.startswith("toga_cocoa"):
+        return False
+    try:
+        from toga_cocoa.libs import NSColor
+        c = parse_color(color_hex)
+        nativo.bordered = False
+        nativo.wantsLayer = True
+        nativo.layer.backgroundColor = NSColor.colorWithRed(
+            c.r / 255, green=c.g / 255, blue=c.b / 255, alpha=c.a).CGColor
+        nativo.layer.cornerRadius = 8
+    except Exception as error:   # no debe impedir mostrar la pantalla
+        logging.warning("No se pudo pintar el fondo del botón %r: %s", boton.text, error)
+        return False
+    return True
 
 
 def _columnas(definicion):
@@ -808,13 +834,15 @@ class BikeCompFollowApp(toga.App):
         self.boton_estadisticas = toga.Button(
             t("menu.estadisticas"),
             on_press=lambda widget: self.ir_a_pantalla_tres(widget, usuario),
-            style=Pack(height=ALTO_ESTADISTICAS, background_color="#FF8C00", **estilo_comun),
+            style=Pack(height=ALTO_ESTADISTICAS, background_color=COLOR_ESTADISTICAS, **estilo_comun),
         )
         self.boton_mantenimiento = toga.Button(
             t("menu.mantenimiento"),
             on_press=lambda widget: self.ir_a_mantenimiento(PANTALLA_MANTENIMIENTO),
-            style=Pack(height=ALTO_MANTENIMIENTO, background_color="#1E64C8", **estilo_comun),
+            style=Pack(height=ALTO_MANTENIMIENTO, background_color=COLOR_MANTENIMIENTO, **estilo_comun),
         )
+        pintar_fondo_boton(self.boton_estadisticas, COLOR_ESTADISTICAS)
+        pintar_fondo_boton(self.boton_mantenimiento, COLOR_MANTENIMIENTO)
 
         contenido = toga.Box(
             children=[
@@ -839,6 +867,37 @@ class BikeCompFollowApp(toga.App):
         if usuario is None:
             usuario = self.usuarioSeleccionado
         self._mostrar(self.construir_menu_usuario(usuario))
+        self.mostrarAlertaComponentes(usuario)
+
+    # -------- Ventana de Alerta: componentes a cambiar de manera urgente --------
+    def componentesUrgentes(self, usuario):
+        """Componentes que el usuario debe cambiar ya. De momento, lista de prueba fija."""
+        return list(COMPONENTES_URGENTES_PRUEBA)
+
+    @staticmethod
+    def textoAlertaComponentes(componentes):
+        return "\n".join([t("aviso.urgentes"), ""] + [f"• {componente}" for componente in componentes])
+
+    def mostrarAlertaComponentes(self, usuario):
+        """Abre la ventana de Alerta si hay componentes urgentes. Devuelve el diálogo (o None si no hay)."""
+        componentes = self.componentesUrgentes(usuario)
+        if not componentes:
+            return None
+        titulo, mensaje = t("aviso.titulo"), self.textoAlertaComponentes(componentes)
+        dialogo = toga.InfoDialog(titulo, mensaje)
+        dialogo.titulo, dialogo.mensaje = titulo, mensaje   # Toga no los guarda: para el log y los tests
+        logging.info("Alerta de componentes urgentes (%s): %s", usuario, ", ".join(componentes))
+        self._abrir_dialogo(dialogo)
+        return dialogo
+
+    def _abrir_dialogo(self, dialogo):
+        """Abre un diálogo sin bloquear: se lanza como tarea del bucle de eventos de Toga."""
+        try:
+            bucle = asyncio.get_running_loop()
+        except RuntimeError:   # fuera del bucle de eventos (p. ej. en tests síncronos)
+            logging.warning("No hay bucle de eventos: no se muestra el diálogo %s", getattr(dialogo, "titulo", ""))
+            return None
+        return bucle.create_task(self.main_window.dialog(dialogo))
 
     # -------- Pantallas de mantenimiento (cuadrículas de componentes) --------
     def construir_pantalla_mantenimiento(self, clave):
