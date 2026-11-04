@@ -193,6 +193,7 @@ class BikeCompFollowApp(toga.App):
         self.crearTablaAlertThresholds()
         self.crearTablaAjustes()
         self.crearTablaActividadesStrava()
+        self.limpiarDuplicadosStrava()
         self.cargarIdioma()
 
         # Pantalla inicial al arrancar
@@ -878,11 +879,19 @@ class BikeCompFollowApp(toga.App):
 
     def crearTablaActividadesStrava(self) -> bool:
         try:
-            self.sqliteConnection.execute(stravaConnect.SQL_CREAR_ACTIVIDADES)
-            self.sqliteConnection.commit()
+            stravaConnect.asegurarTablaActividades(self.sqliteConnection)
             return True
         except sqlite3.Error as error:
             logging.error("Error al crear la tabla ActividadesStrava: %s", error)
+            return False
+
+    def limpiarDuplicadosStrava(self) -> bool:
+        try:
+            stravaConnect.asegurarStravaValoresSinDuplicados(self.sqliteConnection)
+            return True
+        except sqlite3.Error as error:
+            self.sqliteConnection.rollback()
+            logging.error("Error al quitar duplicados de stravaValores: %s", error)
             return False
 
     def vehiculoDelUsuario(self, usuario):

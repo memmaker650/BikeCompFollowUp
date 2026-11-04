@@ -1,5 +1,6 @@
 """Tests de stravaConnect.StravaData sin conectarse a Strava (red y cliente simulados)."""
 
+import sqlite3
 import time
 from datetime import datetime
 from types import SimpleNamespace
@@ -331,7 +332,7 @@ def test_tabla_actividades_strava_columnas(app, tablas):
     assert "ActividadesStrava" in tablas(app.sqliteConnection)
     columnas = {fila[1]: fila[2] for fila in app.sqliteConnection.execute("PRAGMA table_info(ActividadesStrava)")}
     assert columnas == {
-        "id": "INTEGER", "tipo": "TEXT", "distancia": "FLOAT", "altimetria": "FLOAT", "duracion": "FLOAT",
+        "id": "INTEGER", "StravaID": "INTEGER", "tipo": "TEXT", "distancia": "FLOAT", "altimetria": "FLOAT", "duracion": "FLOAT",
         "velocidad_media": "FLOAT", "tipo_vehiculo": "TEXT", "elemento": "TEXT", "user": "TEXT",
     }
 
@@ -339,14 +340,14 @@ def test_tabla_actividades_strava_columnas(app, tablas):
 def test_guardar_actividades_con_unidades(strava_app, db):
     assert strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(111)]) == 1
     assert db.execute("SELECT * FROM ActividadesStrava").fetchall() == [
-        (111, "Ride", 42.2, 512.3, 1.5, 28.08, "Bici Gravel", "Bici b1", "DaMario")
+        (1, 111, "Ride", 42.2, 512.3, 1.5, 28.08, "Bici Gravel", "Bici b1", "DaMario")
     ]
 
 
 def test_sincronizar_otra_vez_no_duplica_y_actualiza(strava_app, db):
     strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(111), actividad_strava(222, "Run")])
     strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(111, metros=50_000.0)])
-    assert db.execute("SELECT id, tipo, distancia FROM ActividadesStrava ORDER BY id").fetchall() == [
+    assert db.execute("SELECT StravaID, tipo, distancia FROM ActividadesStrava ORDER BY StravaID").fetchall() == [
         (111, "Ride", 50.0), (222, "Run", 42.2)
     ]
 
@@ -364,7 +365,7 @@ def test_equipo_se_consulta_una_vez_y_falla_sin_romper(strava_app, db):
     strava_app.guardarActividadesBDD("u", None, [actividad_strava(1), actividad_strava(2), actividad_strava(3, gear="roto"),
                                                  actividad_strava(4, gear=None)])
     assert pedidos == ["b1", "roto"]
-    assert db.execute("SELECT id, elemento FROM ActividadesStrava ORDER BY id").fetchall() == [
+    assert db.execute("SELECT StravaID, elemento FROM ActividadesStrava ORDER BY StravaID").fetchall() == [
         (1, "Canyon"), (2, "Canyon"), (3, "roto"), (4, None)
     ]
 
@@ -396,7 +397,7 @@ def test_strava_sync_guarda_actividades_del_usuario(app, db, monkeypatch):
 
     monkeypatch.setattr(StravaData, "crearObjetoCliente", cliente)
     app.recolectarDatosStrava(None)
-    assert db.execute("SELECT id, tipo_vehiculo, elemento, user FROM ActividadesStrava").fetchall() == [
+    assert db.execute("SELECT StravaID, tipo_vehiculo, elemento, user FROM ActividadesStrava").fetchall() == [
         (7, "Bici Carretera", "Specialized", "DaMario")
     ]
 
@@ -414,6 +415,111 @@ def test_run_y_walk_sin_tipo_vehiculo(strava_app, db, tipo, vehiculo):
 
 def test_resincronizar_run_pone_tipo_vehiculo_a_null(strava_app, db):
     """Si ya había una carrera guardada con vehículo (carga anterior), al sincronizar queda en NULL."""
-    db.execute("INSERT INTO ActividadesStrava (id, tipo, tipo_vehiculo) VALUES (1, 'Run', 'Bici Gravel')")
+    db.execute("INSERT INTO ActividadesStrava (StravaID, tipo, tipo_vehiculo) VALUES (1, 'Run', 'Bici Gravel')")
     strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(1, "Run")])
     assert db.execute("SELECT tipo_vehiculo FROM ActividadesStrava").fetchone() == (None,)
+
+
+# ---- Sin duplicados al sincronizar otra vez ----
+
+def _resumen(strava, km=1959, actividades=62):
+    strava.total_distancia, strava.total_desnivel = km * 1000, 21484
+    strava.total_tiempo, strava.total_actividades = 107 * 3600, actividades
+
+
+def test_resumen_dos_veces_el_mismo_dia_no_duplica(strava):
+    _resumen(strava, 1959, 62)
+    assert strava.guardarDatosBDD(datetime(2026, 11, 4, 12, 46)) is True
+    _resumen(strava, 2000, 63)
+    assert strava.guardarDatosBDD(datetime(2026, 11, 4, 13, 59)) is True
+    assert strava.cursor.execute("SELECT fecha, valor, num_actividades FROM stravaValores").fetchall() == [
+        ("2026-11-04", 2000, 63)                       # una sola fila, con los datos más recientes
+    ]
+
+
+def test_resumen_otro_dia_es_otra_fila(strava):
+    _resumen(strava)
+    strava.guardarDatosBDD(datetime(2026, 11, 3, 10))
+    strava.guardarDatosBDD(datetime(2026, 11, 4, 10))
+    assert strava.cursor.execute("SELECT COUNT(*) FROM stravaValores").fetchone() == (2,)
+
+
+def test_limpieza_de_duplicados_existentes(app, db):
+    """Los datos reales tenían 3 filas iguales del mismo día (ids 3, 4, 5): se queda la última."""
+    db.executemany("INSERT INTO stravaValores (id, fecha, valor, ascenso, tipo, num_actividades, horas) "
+                   "VALUES (?, ?, ?, 0, 'bike', ?, 0)", [
+                       (1, "2026-04-08 16:11:17.573605", 630, 21),
+                       (2, "2026-06-12 15:19:45.962987", 1122, 36),
+                       (3, "2026-11-04 12:46:32.730802", 1959, 62),
+                       (4, "2026-11-04 12:47:16.578879", 1959, 62),
+                       (5, "2026-11-04 13:59:58.149971", 1959, 62),
+                   ])
+    assert app.limpiarDuplicadosStrava() is True
+    assert app.limpiarDuplicadosStrava() is True       # idempotente
+    assert db.execute("SELECT id, fecha, valor FROM stravaValores ORDER BY id").fetchall() == [
+        (1, "2026-04-08", 630), (2, "2026-06-12", 1122), (5, "2026-11-04", 1959)
+    ]
+    with pytest.raises(sqlite3.IntegrityError):         # la BD ya no admite duplicados
+        db.execute("INSERT INTO stravaValores (fecha, valor, tipo) VALUES ('2026-11-04', 1, 'bike')")
+
+
+def test_chequear_datos_acepta_datetime(strava):
+    _resumen(strava)
+    strava.guardarDatosBDD(datetime(2026, 11, 4, 12, 46))
+    assert strava.chequearDatosBDD(datetime(2026, 11, 4, 20, 0)) is True
+
+
+def test_sincronizar_dos_veces_completo_no_duplica_nada(app, db, monkeypatch):
+    db.execute("INSERT INTO EntradasUsers (nombre, usuario, tipov, descripcion) VALUES ('N', 'DaMario', 'Bici Gravel', '')")
+    app.usuarioSeleccionado = "DaMario"
+    monkeypatch.setattr(StravaData, "initConexion", lambda self: None)
+
+    def cliente(self):
+        self.client = SimpleNamespace(
+            get_activities=lambda after, before: [actividad_strava(1), actividad_strava(2, "Run"), actividad_strava(1)],
+            get_gear=lambda gid: SimpleNamespace(name="Canyon"))
+
+    monkeypatch.setattr(StravaData, "crearObjetoCliente", cliente)
+    app.recolectarDatosStrava(None)
+    app.recolectarDatosStrava(None)
+    assert db.execute("SELECT COUNT(*) FROM ActividadesStrava").fetchone() == (2,)
+    assert db.execute("SELECT COUNT(*) FROM stravaValores").fetchone() == (1,)
+
+
+# ---- Columna StravaID ----
+
+def test_stravaid_es_el_id_de_strava_e_id_es_interno(strava_app, db):
+    strava_app.guardarActividadesBDD("u", None, [actividad_strava(16_000_000_001), actividad_strava(16_000_000_002)])
+    strava_app.guardarActividadesBDD("u", None, [actividad_strava(16_000_000_001, metros=1000.0)])
+    assert db.execute("SELECT id, StravaID, distancia FROM ActividadesStrava ORDER BY id").fetchall() == [
+        (1, 16_000_000_001, 1.0), (2, 16_000_000_002, 42.2)      # actualizada, no duplicada, mismo id
+    ]
+
+
+def test_stravaid_unico_y_obligatorio(app, db):
+    db.execute("INSERT INTO ActividadesStrava (StravaID, tipo) VALUES (5, 'Ride')")
+    with pytest.raises(sqlite3.IntegrityError):
+        db.execute("INSERT INTO ActividadesStrava (StravaID, tipo) VALUES (5, 'Ride')")
+    with pytest.raises(sqlite3.IntegrityError):
+        db.execute("INSERT INTO ActividadesStrava (tipo) VALUES ('Ride')")
+
+
+def test_migracion_tabla_antigua_sin_stravaid(tmp_path):
+    conexion = sqlite3.connect(tmp_path / "antigua.db")
+    conexion.execute("""CREATE TABLE ActividadesStrava (id INTEGER PRIMARY KEY, tipo TEXT, distancia FLOAT,
+        altimetria FLOAT, duracion FLOAT, velocidad_media FLOAT, tipo_vehiculo TEXT, elemento TEXT, user TEXT)""")
+    conexion.executemany("INSERT INTO ActividadesStrava VALUES (?, ?, ?, 0, 0, 0, ?, 'Canyon', 'DaMario')", [
+        (17_200_000_002, "Run", 10.0, None), (17_100_000_001, "Ride", 50.0, "Bici Gravel")])
+    conexion.commit()
+
+    stravaConnect.asegurarTablaActividades(conexion)
+    stravaConnect.asegurarTablaActividades(conexion)          # idempotente
+
+    assert conexion.execute("SELECT id, StravaID, tipo, distancia, tipo_vehiculo FROM ActividadesStrava "
+                            "ORDER BY id").fetchall() == [
+        (1, 17_100_000_001, "Ride", 50.0, "Bici Gravel"),
+        (2, 17_200_000_002, "Run", 10.0, None),
+    ]
+    tablas = {f[0] for f in conexion.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "ActividadesStrava_antigua" not in tablas
+    conexion.close()

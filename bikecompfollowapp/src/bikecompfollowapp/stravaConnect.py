@@ -43,11 +43,12 @@ class OAuthHandler(BaseHTTPRequestHandler):
             self.send_response(400)
             self.end_headers()
 
-# Una fila por actividad de Strava. id = id de la actividad en Strava (así no se duplica al
-# sincronizar otra vez). Unidades: distancia km, altimetria m, duracion horas (tiempo en
-# movimiento), velocidad_media km/h.
+# Una fila por actividad de Strava. id = identificador interno de la tabla; StravaID = id de la
+# actividad en Strava (único: al sincronizar otra vez se actualiza la fila en vez de duplicarla).
+# Unidades: distancia km, altimetria m, duracion horas (tiempo en movimiento), velocidad_media km/h.
 SQL_CREAR_ACTIVIDADES = """CREATE TABLE IF NOT EXISTS ActividadesStrava (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    StravaID INTEGER NOT NULL UNIQUE,
     tipo TEXT,
     distancia FLOAT,
     altimetria FLOAT,
@@ -59,8 +60,54 @@ SQL_CREAR_ACTIVIDADES = """CREATE TABLE IF NOT EXISTS ActividadesStrava (
 )"""
 
 
+COLUMNAS_DATOS_ACTIVIDADES = "tipo, distancia, altimetria, duracion, velocidad_media, tipo_vehiculo, elemento, user"
+
+
+def asegurarTablaActividades(conexion) -> None:
+    """Crea ActividadesStrava o, si es de la versión anterior (sin StravaID, con el id de Strava
+    como clave), la migra: el id antiguo pasa a StravaID y id se renumera como id interno."""
+    columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(ActividadesStrava)")}
+    if columnas and "StravaID" not in columnas:
+        logging.info("Migrando ActividadesStrava: se añade la columna StravaID")
+        try:
+            conexion.execute("ALTER TABLE ActividadesStrava RENAME TO ActividadesStrava_antigua")
+            conexion.execute(SQL_CREAR_ACTIVIDADES)
+            conexion.execute(f"""INSERT INTO ActividadesStrava (StravaID, {COLUMNAS_DATOS_ACTIVIDADES})
+                                 SELECT id, {COLUMNAS_DATOS_ACTIVIDADES} FROM ActividadesStrava_antigua ORDER BY id""")
+            conexion.execute("DROP TABLE ActividadesStrava_antigua")
+        except sqlite3.Error:
+            conexion.rollback()
+            raise
+    else:
+        conexion.execute(SQL_CREAR_ACTIVIDADES)
+    conexion.commit()
+
+
 # Actividades sin bici ni otro vehículo: se guardan con tipo_vehiculo = NULL
 TIPOS_SIN_VEHICULO = {"run", "walk"}
+
+
+def _dia(fecha) -> str:
+    """datetime/date/'2026-11-04 12:46:32' -> '2026-11-04' (stravaValores guarda una fila por día)."""
+    if isinstance(fecha, datetime):
+        return fecha.date().isoformat()
+    if hasattr(fecha, "isoformat"):
+        return fecha.isoformat()
+    return str(fecha)[:10]
+
+
+def asegurarStravaValoresSinDuplicados(conexion) -> None:
+    """Deja stravaValores con una sola fila por (día, tipo) y lo garantiza con un índice único.
+
+    Antes cada sincronización añadía una fila nueva con fecha y hora, y varias sincronizaciones
+    el mismo día duplicaban el resumen. Se conserva la fila más reciente de cada día (la de id
+    mayor). Es idempotente: se puede llamar en cada arranque.
+    """
+    conexion.execute("""DELETE FROM stravaValores WHERE id NOT IN (
+                            SELECT MAX(id) FROM stravaValores GROUP BY date(fecha), tipo)""")
+    conexion.execute("UPDATE stravaValores SET fecha = date(fecha) WHERE fecha <> date(fecha)")
+    conexion.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_stravaValores_fecha_tipo ON stravaValores (fecha, tipo)")
+    conexion.commit()
 
 
 def _texto(valor):
@@ -396,7 +443,7 @@ class StravaData:
 
     def chequearDatosBDD(self, fecha) -> bool:
         try:
-            self.cursor.execute("SELECT * FROM stravaValores sv WHERE sv.fecha = ?", (fecha,))
+            self.cursor.execute("SELECT * FROM stravaValores sv WHERE sv.fecha = ?", (_dia(fecha),))
             rows = self.cursor.fetchall()
         except sqlite3.Error as error:
             logging.error("Error al consultar stravaValores: %s", error)
@@ -479,8 +526,7 @@ class StravaData:
 
     def crearTablaActividades(self) -> bool:
         try:
-            self.cursor.execute(SQL_CREAR_ACTIVIDADES)
-            self.sqliteConnection.commit()
+            asegurarTablaActividades(self.sqliteConnection)
             return True
         except sqlite3.Error as error:
             logging.error("Error al crear la tabla ActividadesStrava: %s", error)
@@ -504,7 +550,7 @@ class StravaData:
         actividades = self.actividades if actividades is None else actividades
         filas = [
             (
-                actividad.id,
+                actividad.id,                                           # -> StravaID
                 _texto(actividad.type),
                 _numero(actividad.distance, 1 / 1000),                  # m -> km
                 _numero(actividad.total_elevation_gain, 1, 1),          # m
@@ -521,10 +567,9 @@ class StravaData:
             return 0
         try:
             self.cursor.executemany(
-                """INSERT INTO ActividadesStrava
-                       (id, tipo, distancia, altimetria, duracion, velocidad_media, tipo_vehiculo, elemento, user)
+                f"""INSERT INTO ActividadesStrava (StravaID, {COLUMNAS_DATOS_ACTIVIDADES})
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(id) DO UPDATE SET
+                   ON CONFLICT(StravaID) DO UPDATE SET
                        tipo = excluded.tipo, distancia = excluded.distancia, altimetria = excluded.altimetria,
                        duracion = excluded.duracion, velocidad_media = excluded.velocidad_media,
                        tipo_vehiculo = excluded.tipo_vehiculo, elemento = excluded.elemento, user = excluded.user""",
@@ -538,21 +583,26 @@ class StravaData:
         logging.info("Guardadas %d actividades de Strava de %s", len(filas), usuario)
         return len(filas)
 
-    def guardarDatosBDD(self, fecha):
-        # Meter los datos extraídos en base de datos.
-        print("Dentro de guardado datos Strava en BDD")
+    def guardarDatosBDD(self, fecha) -> bool:
+        """Guarda el resumen en stravaValores. Una fila por día y tipo: si ya había una (otra
+        sincronización el mismo día) se actualiza en vez de duplicarla."""
+        fila = (_dia(fecha), math.trunc(self.total_distancia / 1000), math.trunc(self.total_desnivel), "bike",
+                self.total_actividades, math.trunc(self.total_tiempo / 3600))
         try:
-            self.cursor.execute("INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas) VALUES (?, ?, ?, ?, ?, ?)", (fecha, math.trunc(self.total_distancia/ 1000), 
-                math.trunc(self.total_desnivel), "bike", self.total_actividades, math.trunc(self.total_tiempo / 3600)))
-            
+            asegurarStravaValoresSinDuplicados(self.sqliteConnection)
+            self.cursor.execute(
+                """INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(fecha, tipo) DO UPDATE SET
+                       valor = excluded.valor, ascenso = excluded.ascenso,
+                       num_actividades = excluded.num_actividades, horas = excluded.horas""",
+                fila,
+            )
             self.sqliteConnection.commit()
-            
-            if self.cursor.rowcount > 0:
-                print("Registro insertado correctamente")
-                logging.info("Registro insertado correctamente")
-            else:
-                print("No se insertó ningún registro")
-                logging.warning("No se insertó ningún registro")
-        except sqlite3.Error as error: 
+        except sqlite3.Error as error:
+            self.sqliteConnection.rollback()
             print("Error al insertar en stravaValores:", error)
             logging.error("Error al insertar en stravaValores: %s", error)
+            return False
+        logging.info("Resumen de Strava guardado para %s", fila[0])
+        return True
