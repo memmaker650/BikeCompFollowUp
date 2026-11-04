@@ -16,8 +16,10 @@ from datetime import datetime
 
 if __name__ == "__main__" or __package__ is None:
     import stravaConnect
+    import translations
 else:
-    from . import stravaConnect
+    from . import stravaConnect, translations
+t = translations.t
 import asyncio
 from plyer import notification
 
@@ -32,17 +34,20 @@ DISTANCIA_LIMITE_DEFECTO = 5000
 TIEMPO_LIMITE_DEFECTO = 500
 ELEMENTOS_POR_DEFECTO = ["Cadena", "Pastillas Freno", "Cubiertas"]
 
-# Columnas de las tablas de la pantalla Estadísticas: (cabecera, atributo de la fila)
+# Columnas de las tablas de la pantalla Estadísticas: (clave de traducción de la cabecera, atributo de la fila)
 COLUMNAS_COMPONENTES = [
-    ("Componente", "elemento"), ("Descripción", "descripcion"), ("Fecha", "fechaInsercion"),
-    ("Km máx", "distanciaLimite"), ("Km desde alta", "distanciaDesdeInsercion"),
-    ("Tiempo", "tiempoLimite"), ("Activo", "activo"),
+    ("col.componente", "elemento"), ("col.descripcion", "descripcion"), ("col.fecha", "fechaInsercion"),
+    ("col.km_max", "distanciaLimite"), ("col.km_desde_alta", "distanciaDesdeInsercion"),
+    ("col.tiempo", "tiempoLimite"), ("col.activo", "activo"),
 ]
-COLUMNAS_LIMITES = [("Componente", "componente"), ("Tipo Límite", "tipo_limite"), ("Valor", "valor")]
+COLUMNAS_LIMITES = [("col.componente", "componente"), ("col.tipo_limite", "tipo_limite"), ("col.valor", "valor")]
+
+# Tipos de límite tal y como se guardan en LimitesAlerta -> clave del texto que se muestra
+TIPOS_LIMITE = {"superior": "alerta.superior", "inferior": "alerta.inferior"}
 
 
 def _columnas(definicion):
-    return [AccessorColumn(cabecera, atributo) for cabecera, atributo in definicion]
+    return [AccessorColumn(t(clave), atributo) for clave, atributo in definicion]
 
 
 # Datos con los que se siembra una BD nueva
@@ -55,63 +60,65 @@ ELEMENTOS_INICIALES = [
 # ---- Pantallas de mantenimiento ----
 PANTALLA_MANTENIMIENTO = "mantenimiento"
 
+# Todos los textos son claves de translations_data.xml. El componente se guarda en la BD con el
+# texto del idioma por defecto (castellano), sea cual sea el idioma de la pantalla.
 # clave -> (título, filas de botones, alto de botón o None, pantalla anterior o None = menú usuario)
 PANTALLAS_MANTENIMIENTO = {
     PANTALLA_MANTENIMIENTO: (
-        "Mantenimiento / Paso por taller",
+        "menu.mantenimiento",
         [
-            ["Cadena", "Pastillas freno", "Cubiertas", "Líquido Tubeless"],
-            ["Cinta Manillar", "Disco Freno", "Rodamientos", "Otros"],
+            ["taller.cadena", "taller.pastillas", "taller.cubiertas", "taller.tubeless"],
+            ["taller.cinta", "taller.disco", "taller.rodamientos", "taller.otros"],
         ],
         None,
         None,
     ),
     "componentes": (
-        "Componentes",
+        "mant.componentes",
         [
-            ["CADENA", "PASTILLA/S FRENO", "CUBIERTA", "TUBELESS"],
-            ["CINTA MANILLAR", "DISCO/s FRENO", "RODAMIENTOS"],
-            ["HORQUILLA", "SUSPENSIÓN", "Otros"],
+            ["pieza.cadena", "pieza.pastillas", "pieza.cubierta", "pieza.tubeless"],
+            ["pieza.cinta", "pieza.disco", "pieza.rodamientos"],
+            ["pieza.horquilla", "pieza.suspension", "pieza.otros"],
         ],
         150,
         PANTALLA_MANTENIMIENTO,
     ),
     "otros": (
-        "Otros componentes",
+        "mant.otros",
         [
-            ["PEDALIER", "BIELAS", "Purgado FRENOS", "CAMBIO TRASERO"],
-            ["PIÑONERA", "PLATO/S", "MANETA/S PULSADORES", "PEDALES"],
-            ["ENGRASE GENERAL", "TIJA", "SILLÍN", "PEDALES", "ENGRASE EJES"],
+            ["pieza.pedalier", "pieza.bielas", "pieza.purgado", "pieza.cambio"],
+            ["pieza.pinonera", "pieza.platos", "pieza.manetas", "pieza.pedales"],
+            ["pieza.engrase", "pieza.tija", "pieza.sillin", "pieza.pedales", "pieza.engrase_ejes"],
         ],
         150,
         "componentes",
     ),
     "rodamientos": (
-        "Rodamientos",
+        "mant.rodamientos",
         [
-            ["DIRECCIÓN SUPERIOR", "DIRECCIÓN INFERIOR", "RUEDA DELANTERA - INTERIOR", "RUEDA DELANTERA - EXTERIOR"],
-            ["RUEDA TRASERA - INTERIOR", "RUEDA TRASERA - EXTERIOR"],
+            ["pieza.direccion_sup", "pieza.direccion_inf", "pieza.rueda_del_int", "pieza.rueda_del_ext"],
+            ["pieza.rueda_tra_int", "pieza.rueda_tra_ext"],
         ],
         150,
         "componentes",
     ),
     "tubeless": (
-        "Tubeless",
+        "mant.tubeless",
         [
-            ["LIQUIDO", "PINCHAZO"],
-            ["CINTA TUBELESS", "AÑADIDO"],
+            ["pieza.liquido", "pieza.pinchazo"],
+            ["pieza.cinta_tubeless", "pieza.anadido"],
         ],
         150,
         "componentes",
     ),
 }
 
-# (pantalla, texto del botón) -> subpantalla que abre. El resto de botones abren el alta de componente.
+# (pantalla, clave del botón) -> subpantalla que abre. El resto de botones abren el alta de componente.
 SUBPANTALLAS_MANTENIMIENTO = {
-    (PANTALLA_MANTENIMIENTO, "Otros"): "componentes",
-    ("componentes", "Otros"): "otros",
-    ("componentes", "RODAMIENTOS"): "rodamientos",
-    ("componentes", "TUBELESS"): "tubeless",
+    (PANTALLA_MANTENIMIENTO, "taller.otros"): "componentes",
+    ("componentes", "pieza.otros"): "otros",
+    ("componentes", "pieza.rodamientos"): "rodamientos",
+    ("componentes", "pieza.tubeless"): "tubeless",
 }
 
 
@@ -184,6 +191,8 @@ class BikeCompFollowApp(toga.App):
 
         self.arrancarDB()
         self.crearTablaAlertThresholds()
+        self.crearTablaAjustes()
+        self.cargarIdioma()
 
         # Pantalla inicial al arrancar
         self.main_window.content = self.construir_pantalla_inicial()
@@ -285,6 +294,50 @@ class BikeCompFollowApp(toga.App):
 
         logging.info('Fin acciones Base de Datos')
 
+    # -------- Ajustes (clave/valor) e idioma --------
+    def crearTablaAjustes(self) -> bool:
+        try:
+            self.sqliteConnection.execute("CREATE TABLE IF NOT EXISTS ajustes (clave TEXT PRIMARY KEY, valor TEXT)")
+            self.sqliteConnection.commit()
+            return True
+        except sqlite3.Error as error:
+            logging.error("Error al crear la tabla ajustes: %s", error)
+            return False
+
+    def leerAjuste(self, clave, por_defecto=None):
+        try:
+            fila = self.sqliteConnection.execute("SELECT valor FROM ajustes WHERE clave = ?", (clave,)).fetchone()
+        except sqlite3.Error as error:
+            logging.error("Error al leer el ajuste %s: %s", clave, error)
+            return por_defecto
+        return fila[0] if fila else por_defecto
+
+    def guardarAjuste(self, clave, valor) -> bool:
+        try:
+            self.sqliteConnection.execute(
+                "INSERT INTO ajustes (clave, valor) VALUES (?, ?) "
+                "ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor",
+                (clave, valor),
+            )
+            self.sqliteConnection.commit()
+            return True
+        except sqlite3.Error as error:
+            logging.error("Error al guardar el ajuste %s: %s", clave, error)
+            return False
+
+    def cargarIdioma(self):
+        """Carga el XML de textos y aplica el idioma guardado (castellano si no hay ninguno)."""
+        translations.load()
+        translations.set_language(self.leerAjuste("idioma", translations.current().code))
+
+    def cambiarIdioma(self, widget=None):
+        """Botón de la bandera: pasa al siguiente idioma, lo guarda y redibuja la pantalla."""
+        idioma = translations.next_language()
+        translations.set_language(idioma.code)
+        if not self.guardarAjuste("idioma", idioma.code):
+            logging.error("No se pudo guardar el idioma %s; solo se aplica a esta sesión", idioma.code)
+        self.volver_pantalla_inicial()
+
     def cerrarDB(self):
         #Cerramos base de datos
         self.sqliteConnection.close()
@@ -312,7 +365,9 @@ class BikeCompFollowApp(toga.App):
         return caja
 
     @staticmethod
-    def _texto(placeholder="Escribe algo...", **kwargs):
+    def _texto(placeholder=None, **kwargs):
+        if placeholder is None:
+            placeholder = t("comun.placeholder")
         return toga.TextInput(placeholder=placeholder, style=Pack(width=ANCHO_CAMPO), **kwargs)
 
     @staticmethod
@@ -320,7 +375,7 @@ class BikeCompFollowApp(toga.App):
         return toga.Button(texto, on_press=accion, style=Pack(margin=10))
 
     def _boton_volver(self, accion):
-        return self._boton("◀ Volver", lambda widget: accion())
+        return self._boton(t("comun.volver"), lambda widget: accion())
 
     @staticmethod
     def _barra_inferior(izquierda=None, derecha=None):
@@ -355,7 +410,7 @@ class BikeCompFollowApp(toga.App):
         )
 
         self.label = toga.Label(
-            "Selecciona el usuario",
+            t("inicio.titulo"),
             style=Pack(margin_bottom=20, text_align=CENTER)
         )
         contenido_box.add(self.label)
@@ -373,8 +428,16 @@ class BikeCompFollowApp(toga.App):
                 style=Pack(width=140, height=60, margin=0),
             ))
 
+        self.boton_idioma = toga.Button(
+            translations.current().flag,
+            on_press=self.cambiarIdioma,
+            style=Pack(margin=10, font_size=22),
+        )
         barra_inferior = self._barra_inferior(
-            derecha=self._boton("+ Usuario", self.ir_a_pantalla_dos),
+            derecha=toga.Box(
+                children=[self._boton(t("inicio.nuevo_usuario"), self.ir_a_pantalla_dos), self.boton_idioma],
+                style=Pack(direction=ROW, align_items=CENTER),
+            ),
         )
         return self._pantalla(contenido_box, barra_inferior)
 
@@ -389,29 +452,32 @@ class BikeCompFollowApp(toga.App):
             width=ANCHO_BOTONES_MENU, color="#FFFFFF", font_size=16, font_weight="bold",
         )
         self.boton_estadisticas = toga.Button(
-            "Estadísticas",
+            t("menu.estadisticas"),
             on_press=lambda widget: self.ir_a_pantalla_tres(widget, usuario),
             style=Pack(height=ALTO_ESTADISTICAS, background_color="#FF8C00", **estilo_comun),
         )
         self.boton_mantenimiento = toga.Button(
-            "Mantenimiento / Paso por taller",
+            t("menu.mantenimiento"),
             on_press=lambda widget: self.ir_a_mantenimiento(PANTALLA_MANTENIMIENTO),
             style=Pack(height=ALTO_MANTENIMIENTO, background_color="#1E64C8", **estilo_comun),
         )
 
         contenido = toga.Box(
             children=[
-                toga.Label(f"Usuario: {usuario}", style=Pack(margin_bottom=20, font_size=16)),
+                toga.Label(t("menu.usuario", usuario=usuario), style=Pack(margin_bottom=20, font_size=16)),
                 self.boton_estadisticas,
                 toga.Box(style=Pack(height=ESPACIO)),
                 self.boton_mantenimiento,
             ],
-            style=Pack(direction=COLUMN, align_items=CENTER, flex=1),
+            # Sin flex: el espaciador de _pantalla ya empuja la barra inferior hacia abajo.
+            # Con flex=1 en ambos, Toga daba a este bloque su alto mínimo más la mitad del hueco
+            # y la barra (Volver / Strava Sync) quedaba fuera de la ventana.
+            style=Pack(direction=COLUMN, align_items=CENTER),
         )
 
         barra_inferior = self._barra_inferior(
-            izquierda=self._boton("Strava Sync", self.ir_a_pantalla_recoleccionDatos),
-            derecha=self._boton_volver(self.volver_pantalla_inicial),
+            izquierda=self._boton_volver(self.volver_pantalla_inicial),
+            derecha=self._boton(t("menu.strava"), self.ir_a_pantalla_recoleccionDatos),
         )
         return self._pantalla(contenido, barra_inferior)
 
@@ -432,18 +498,18 @@ class BikeCompFollowApp(toga.App):
             if n:
                 rejilla.add(toga.Box(style=Pack(height=ESPACIO)))
             fila = toga.Box(style=Pack(direction=ROW, flex=1))
-            for i, texto in enumerate(textos):
+            for i, boton in enumerate(textos):
                 if i:
                     fila.add(toga.Box(style=Pack(width=ESPACIO)))
                 fila.add(toga.Button(
-                    texto,
-                    on_press=lambda widget, t=texto: self.pulsar_boton_mantenimiento(clave, t),
+                    t(boton),
+                    on_press=lambda widget, b=boton: self.pulsar_boton_mantenimiento(clave, b),
                     style=Pack(**estilo_boton),
                 ))
             rejilla.add(fila)
 
         contenido = toga.Box(style=Pack(direction=COLUMN, flex=1))
-        contenido.add(toga.Label(titulo, style=Pack(margin_bottom=ESPACIO, font_size=16)))
+        contenido.add(toga.Label(t(titulo), style=Pack(margin_bottom=ESPACIO, font_size=16)))
         contenido.add(rejilla)
 
         main_box = toga.Box(style=Pack(direction=COLUMN, margin=10))
@@ -463,15 +529,15 @@ class BikeCompFollowApp(toga.App):
         else:
             self.ir_a_mantenimiento(anterior)
 
-    def pulsar_boton_mantenimiento(self, clave, texto):
+    def pulsar_boton_mantenimiento(self, clave, boton):
         """Un botón abre una subpantalla si la tiene; si no, el alta del componente."""
-        destino = SUBPANTALLAS_MANTENIMIENTO.get((clave, texto))
+        destino = SUBPANTALLAS_MANTENIMIENTO.get((clave, boton))
         if destino:
             self.ir_a_mantenimiento(destino)
         else:
             self._mostrar(self.construir_pantalla_cinco(
                 self.usuarioSeleccionado,
-                elemento=texto,
+                elemento=translations.default_text(boton),
                 volver=lambda: self.ir_a_mantenimiento(clave),
             ))
 
@@ -490,7 +556,7 @@ class BikeCompFollowApp(toga.App):
         )
 
         self.label_pantalla_dos = toga.Label(
-            "Nueva Entrada",
+            t("alta.titulo"),
             style=Pack(margin_bottom=20, text_align=CENTER)
         )
         self.entrada_texto = self._texto()
@@ -498,18 +564,18 @@ class BikeCompFollowApp(toga.App):
         self.descripcion_texto = self._texto()
         self.selection_tipo_vehiculo = toga.Selection(items=tipos_vehiculo, style=Pack(width=ANCHO_CAMPO))
         self.selection_elemento = toga.Selection(items=tipos_elemento, style=Pack(width=ANCHO_CAMPO))
-        self.entrada_fecha = self._texto("Fecha instalación", value=datetime.today().strftime("%Y-%m-%d"))
-        boton_cargar = self._boton("Cargar", self.cargar_entrada)
+        self.entrada_fecha = self._texto(t("campo.fecha_placeholder"), value=datetime.today().strftime("%Y-%m-%d"))
+        boton_cargar = self._boton(t("comun.cargar"), self.cargar_entrada)
         boton_volver = self._boton_volver(self.volver_pantalla_inicial)
 
         contenido_box = self._formulario()
         contenido_box.add(self.label_pantalla_dos)
-        contenido_box.add(self._campo("Nombre", self.entrada_texto))
-        contenido_box.add(self._campo("Usuario", self.usuario_texto))
-        contenido_box.add(self._campo("Descripción: ", self.descripcion_texto))
-        contenido_box.add(self._campo("Tipo vehículo", self.selection_tipo_vehiculo))
-        contenido_box.add(self._campo("Elemento", self.selection_elemento))
-        contenido_box.add(self._campo("Fecha", self.entrada_fecha))
+        contenido_box.add(self._campo(t("campo.nombre"), self.entrada_texto))
+        contenido_box.add(self._campo(t("campo.usuario"), self.usuario_texto))
+        contenido_box.add(self._campo(t("campo.descripcion"), self.descripcion_texto))
+        contenido_box.add(self._campo(t("campo.tipo_vehiculo"), self.selection_tipo_vehiculo))
+        contenido_box.add(self._campo(t("campo.elemento"), self.selection_elemento))
+        contenido_box.add(self._campo(t("campo.fecha"), self.entrada_fecha))
         contenido_box.add(boton_cargar)
 
         # Orden de tabulación (Tab) entre campos
@@ -546,9 +612,9 @@ class BikeCompFollowApp(toga.App):
             self.sqliteConnection.commit()
         except sqlite3.Error as error:
             logging.error("Error al insertar en EntradasUsers: %s", error)
-            self._mostrar_estado(self.label_pantalla_dos, "Error al cargar la entrada.", ok=False)
+            self._mostrar_estado(self.label_pantalla_dos, t("estado.entrada_error"), ok=False)
             return
-        self._mostrar_estado(self.label_pantalla_dos, "Entrada cargada correctamente.")
+        self._mostrar_estado(self.label_pantalla_dos, t("estado.entrada_ok"))
         logging.info("Datos de Entrada cargados correctamente.")
 
     @staticmethod
@@ -561,7 +627,7 @@ class BikeCompFollowApp(toga.App):
         self.usuarioSeleccionado = valor
 
         self.label_pantalla_dos = toga.Label(
-            f"User: {valor}",
+            t("menu.usuario", usuario=valor),
             style=Pack(margin_bottom=20, text_align=CENTER)
         )
 
@@ -574,7 +640,7 @@ class BikeCompFollowApp(toga.App):
             logging.info("Datos de TABLA LEÍDOS correctamente.")
         except sqlite3.Error as error:
             logging.error("Error en el SELECT de la TABLA Comp: %s", error)
-            self._mostrar_estado(self.label_pantalla_dos, "Error al leer los componentes.", ok=False)
+            self._mostrar_estado(self.label_pantalla_dos, t("estado.lectura_error"), ok=False)
             data = []
 
         self.componentes_disponibles = [fila[0] for fila in data if fila and fila[0] is not None]
@@ -590,7 +656,7 @@ class BikeCompFollowApp(toga.App):
         )
 
         self.Title_tablaLimites = toga.Label(
-            "Límite Alerta: ",
+            t("estadisticas.limites"),
             style=Pack(text_align=LEFT, font_size=16)
         )
 
@@ -614,8 +680,8 @@ class BikeCompFollowApp(toga.App):
 
         botones_derecha = toga.Box(
             children=[
-                self._boton("+ Componente", lambda widget: self.ir_a_pantalla_cinco(widget, valor)),
-                self._boton("+ Límite Alerta", lambda widget: self.PantallaNuevaAlerta(
+                self._boton(t("estadisticas.nuevo_componente"), lambda widget: self.ir_a_pantalla_cinco(widget, valor)),
+                self._boton(t("estadisticas.nuevo_limite"), lambda widget: self.PantallaNuevaAlerta(
                     self.obtener_componente_seleccionado(),
                     self.componentes_disponibles,
                 )),
@@ -676,9 +742,9 @@ class BikeCompFollowApp(toga.App):
             self.sqliteConnection.commit()
         except sqlite3.Error as error:
             logging.error("Error al insertar en archivoscomponentes: %s", error)
-            self._mostrar_estado(self.label_pantalla_dos, "Error al cargar el componente.", ok=False)
+            self._mostrar_estado(self.label_pantalla_dos, t("estado.componente_error"), ok=False)
             return False
-        self._mostrar_estado(self.label_pantalla_dos, "Entrada cargada correctamente.")
+        self._mostrar_estado(self.label_pantalla_dos, t("estado.entrada_ok"))
         logging.info("Componente cargado correctamente.")
         return True
 
@@ -700,10 +766,10 @@ class BikeCompFollowApp(toga.App):
             elemento = coincidencia
 
         self.label_pantalla_dos = toga.Label(
-            f"Añadir Componente: {valor}",
+            t("componente.titulo", usuario=valor),
             style=Pack(margin_bottom=20, text_align=CENTER)
         )
-        self.entrada_fecha = self._texto("Fecha instalación", value=datetime.today().strftime("%Y-%m-%d"))
+        self.entrada_fecha = self._texto(t("campo.fecha_placeholder"), value=datetime.today().strftime("%Y-%m-%d"))
         self.selection_elemento = toga.Selection(items=tipos_elemento, style=Pack(width=ANCHO_CAMPO))
         if elemento:
             self.selection_elemento.value = elemento
@@ -714,13 +780,13 @@ class BikeCompFollowApp(toga.App):
 
         contenido_box = self._formulario()
         contenido_box.add(self.label_pantalla_dos)
-        contenido_box.add(self._campo("Fecha", self.entrada_fecha))
-        contenido_box.add(self._campo("Elemento", self.selection_elemento))
-        contenido_box.add(self._campo("Descripción: ", self.descripcion_texto))
-        contenido_box.add(self._campo("Marca Comp: ", self.marca_texto))
-        contenido_box.add(self._campo("Distancia Límite: ", self.distancialim_texto))
-        contenido_box.add(self._campo("Tiempo Límite: ", self.tiempolim_texto))
-        contenido_box.add(self._boton("Cargar", lambda widget: self.cargar_componente(
+        contenido_box.add(self._campo(t("campo.fecha"), self.entrada_fecha))
+        contenido_box.add(self._campo(t("campo.elemento"), self.selection_elemento))
+        contenido_box.add(self._campo(t("campo.descripcion"), self.descripcion_texto))
+        contenido_box.add(self._campo(t("campo.marca"), self.marca_texto))
+        contenido_box.add(self._campo(t("campo.distancia_limite"), self.distancialim_texto))
+        contenido_box.add(self._campo(t("campo.tiempo_limite"), self.tiempolim_texto))
+        contenido_box.add(self._boton(t("comun.cargar"), lambda widget: self.cargar_componente(
             self.entrada_fecha, self.usuarioSeleccionado, self.selection_elemento, self.descripcion_texto,
             self.marca_texto, self.distancialim_texto, self.tiempolim_texto,
         )))
@@ -733,10 +799,14 @@ class BikeCompFollowApp(toga.App):
 
     # -------- Pantalla Nueva Límite Alerta --------
     def construir_pantalla_nuevoLimiteAlerta(self, item, componentes=None):
-        tipoAlerta = self._leer_lista(
-            "SELECT DISTINCT tipo_limite FROM LimitesAlerta WHERE tipo_limite IS NOT NULL ORDER BY tipo_limite",
-            por_defecto=["Precio Superior", "Precio Inferior"],
-        )
+        # Tipos ya usados en LimitesAlerta ('superior'/'inferior'), mostrados en el idioma activo
+        tipoAlerta = [
+            t(TIPOS_LIMITE[tipo]) if tipo in TIPOS_LIMITE else tipo
+            for tipo in self._leer_lista(
+                "SELECT DISTINCT tipo_limite FROM LimitesAlerta WHERE tipo_limite IS NOT NULL ORDER BY tipo_limite",
+                por_defecto=list(TIPOS_LIMITE),
+            )
+        ]
 
         componentes_disponibles = list(componentes or [])
         if not componentes_disponibles and self.usuarioSeleccionado is not None:
@@ -747,23 +817,23 @@ class BikeCompFollowApp(toga.App):
         if item and item not in componentes_disponibles:
             componentes_disponibles.insert(0, item)
 
-        self.tituloPantallaAlerta = "Añadir Nuevo/s Límites de valor Sup/Inf para Alerta. " + self.label_estado
+        self.tituloPantallaAlerta = t("alerta.titulo") + self.label_estado
         self.label_pantalla_LimiteNuevaAlerta = toga.Label(
             self.tituloPantallaAlerta,
             style=Pack(margin_bottom=20, text_align=CENTER)
         )
         self.tipo_limite = toga.Selection(items=tipoAlerta, style=Pack(width=ANCHO_CAMPO))
-        self.valor_limite = self._texto("Escribe valor...")
+        self.valor_limite = self._texto(t("alerta.valor_placeholder"))
         self.componente_dropdown = toga.Selection(items=componentes_disponibles, style=Pack(width=ANCHO_CAMPO))
         if item in componentes_disponibles:
             self.componente_dropdown.value = item
 
         contenido_box = self._formulario()
         contenido_box.add(self.label_pantalla_LimiteNuevaAlerta)
-        contenido_box.add(self._campo("Tipo Alerta : ", self.tipo_limite))
-        contenido_box.add(self._campo("Valor: ", self.valor_limite))
-        contenido_box.add(self._campo("Componente: ", self.componente_dropdown))
-        contenido_box.add(self._boton("Añadir", self.cargar_limiteAlerta))
+        contenido_box.add(self._campo(t("alerta.tipo"), self.tipo_limite))
+        contenido_box.add(self._campo(t("alerta.valor"), self.valor_limite))
+        contenido_box.add(self._campo(t("alerta.componente"), self.componente_dropdown))
+        contenido_box.add(self._boton(t("comun.anadir"), self.cargar_limiteAlerta))
 
         volver = self._boton_volver(lambda: self.ir_a_pantalla_tres(None, self.usuarioSeleccionado))
         return self._pantalla(contenido_box, self._barra_inferior(izquierda=volver))
@@ -786,7 +856,9 @@ class BikeCompFollowApp(toga.App):
         if not getattr(self.tipo_limite, "value", None):
             logging.warning("Falta el TIPO DE ALERTA")
         else:
-            tipo_alerta = 'superior' if self.tipo_limite.value in ('Precio Superior', 'superior') else 'inferior'
+            # El desplegable muestra el texto traducido; en la BD se guarda 'superior' o 'inferior'
+            superiores = {'superior', t(TIPOS_LIMITE['superior']), translations.default_text(TIPOS_LIMITE['superior'])}
+            tipo_alerta = 'superior' if self.tipo_limite.value in superiores else 'inferior'
             valor_limite = (self.valor_limite.value or "").strip()
             compo = (self.componente_dropdown.value or "").strip()
             try:
@@ -823,13 +895,13 @@ class BikeCompFollowApp(toga.App):
     # -------- Pantalla de sincronización con Strava --------
     def iniciar_tarea(self, widget):
         self.add_background_task(self.tarea_larga)
-        notification.notify(title="Inicio", message="Fin Tareas", app_name="BikeCompFollowApp", app_icon="resources/bici2.icns")
+        notification.notify(title=t("notificacion.titulo"), message=t("notificacion.fin"), app_name="BikeCompFollowApp", app_icon="resources/bici2.icns")
 
     async def tarea_larga(self, widget):
         for i in range(1, self.total + 1):
             await asyncio.sleep(0.3)
             self.progress.value = i
-            self.label.text = f"Procesando {i} de {self.total}"
+            self.label.text = t("strava.procesando", actual=i, total=self.total)
 
     def recolectarDatosStrava(self, widget):
         datosStrava = stravaConnect.StravaData(self)
@@ -844,14 +916,14 @@ class BikeCompFollowApp(toga.App):
     def barraProgresoCargaDatos(self):
         self.total = 20
 
-        self.label = toga.Label("Pulsa Inicio para cargar los datos.", style=Pack(margin=10))
+        self.label = toga.Label(t("strava.pulsa_inicio"), style=Pack(margin=10))
         self.progress = toga.ProgressBar(max=self.total, value=0, style=Pack(margin=10))
 
         box = toga.Box(style=Pack(direction=COLUMN, margin=20))
         box.add(self.label)
         box.add(self.progress)
-        box.add(self._boton("Iniciar", self.iniciar_tarea))
-        box.add(self._boton("Extraer Datos Strava", self.recolectarDatosStrava))
+        box.add(self._boton(t("strava.iniciar"), self.iniciar_tarea))
+        box.add(self._boton(t("strava.extraer"), self.recolectarDatosStrava))
         box.add(self._barra_inferior(izquierda=self._boton_volver(self.ir_a_menu_usuario)))
         return box
 

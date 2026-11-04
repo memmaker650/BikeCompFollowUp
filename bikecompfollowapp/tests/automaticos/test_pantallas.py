@@ -3,6 +3,7 @@
 import pytest
 import toga
 
+from bikecompfollowapp.translations import t
 from bikecompfollowapp.app import (
     PANTALLA_MANTENIMIENTO,
     PANTALLAS_MANTENIMIENTO,
@@ -97,10 +98,12 @@ def test_mas_usuario_abre_alta_y_vuelve(con_usuario):
 
 # ---- Menú del usuario ----
 
-def test_menu_strava_sync_abajo_a_la_izquierda(en_menu):
+def test_menu_volver_abajo_izquierda_y_strava_sync_a_la_derecha(en_menu):
     barra = barra_inferior(en_menu.main_window.content)
     assert isinstance(barra.children[0], toga.Button)
-    assert barra.children[0].text == "Strava Sync"
+    assert barra.children[0].text == "◀ Volver"
+    assert isinstance(barra.children[-1], toga.Button)
+    assert barra.children[-1].text == "Strava Sync"
 
 
 def test_menu_tamano_botones(en_menu):
@@ -140,8 +143,8 @@ def test_strava_sync_abre_sincronizacion_y_vuelve_a_menu(en_menu):
 def test_mantenimiento_muestra_cuadricula(en_menu):
     pantalla = pulsar(en_menu, "Mantenimiento / Paso por taller")
     filas = PANTALLAS_MANTENIMIENTO[PANTALLA_MANTENIMIENTO][1]
-    esperados = [t for fila in filas for t in fila]
-    assert [t for t in textos_botones(pantalla) if t != "◀ Volver"] == esperados
+    esperados = [t(clave) for fila in filas for clave in fila]
+    assert [texto for texto in textos_botones(pantalla) if texto != "◀ Volver"] == esperados
 
 
 @pytest.mark.parametrize("ruta, clave", [
@@ -156,9 +159,9 @@ def test_navegacion_subpantallas(en_menu, ruta, clave):
         pantalla = pulsar(en_menu, texto)
 
     titulo, filas, alto, _ = PANTALLAS_MANTENIMIENTO[clave]
-    assert titulo in textos_labels(pantalla)
+    assert t(titulo) in textos_labels(pantalla)
     botones = [b for b in widgets(pantalla, toga.Button) if b.text != "◀ Volver"]
-    assert [b.text for b in botones] == [t for fila in filas for t in fila], "Se pintan todas las filas"
+    assert [b.text for b in botones] == [t(c) for fila in filas for c in fila], "Se pintan todas las filas"
     if alto:
         assert all(b.style.height == alto for b in botones)
 

@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from bikecompfollowapp import translations
 from bikecompfollowapp.app import AppPaths, BikeCompFollowApp
 
 
@@ -28,6 +29,14 @@ class Campo:
         self.value = value
         self.text = text
         self.style = SimpleNamespace(color=None)
+
+
+@pytest.fixture(autouse=True)
+def idioma_por_defecto():
+    """Cada test empieza en castellano: el idioma activo es global al módulo translations."""
+    translations.load()
+    yield
+    translations.load()
 
 
 @pytest.fixture
@@ -54,6 +63,8 @@ def app(app_paths):
     instancia.label_estado = ""
     instancia.arrancarDB()
     instancia.crearTablaAlertThresholds()
+    instancia.crearTablaAjustes()
+    instancia.cargarIdioma()
     yield instancia
     instancia.sqliteConnection.close()
 
