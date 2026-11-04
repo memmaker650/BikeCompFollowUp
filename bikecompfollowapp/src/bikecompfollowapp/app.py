@@ -15,13 +15,13 @@ import logging
 from datetime import datetime
 
 if __name__ == "__main__" or __package__ is None:
+    import notificaciones
     import stravaConnect
     import translations
 else:
-    from . import stravaConnect, translations
+    from . import notificaciones, stravaConnect, translations
 t = translations.t
 import asyncio
-from plyer import notification
 
 # ---- Medidas de interfaz (Toga trabaja en píxeles; 1 cm ≈ 38 px a 96 ppp) ----
 ANCHO_CAMPO = 250
@@ -212,8 +212,8 @@ class BikeCompFollowApp(toga.App):
         logging.info("Dentro borrar Datos")
 
     # Método para lanzar Notificaciones
-    def lanzarNotificacion(self):
-        logging.info("Dentro lanzar Notificación.")
+    def lanzarNotificacion(self, titulo=None, mensaje=None) -> bool:
+        return notificaciones.notificar(titulo or t("notificacion.titulo"), mensaje or t("notificacion.fin"))
 
     def crearDBBasica(self):
         try:
@@ -894,14 +894,16 @@ class BikeCompFollowApp(toga.App):
 
     # -------- Pantalla de sincronización con Strava --------
     def iniciar_tarea(self, widget):
-        self.add_background_task(self.tarea_larga)
-        notification.notify(title=t("notificacion.titulo"), message=t("notificacion.fin"), app_name="BikeCompFollowApp", app_icon="resources/bici2.icns")
+        # Se guarda la referencia para que el recolector de basura no cancele la tarea
+        self._tarea_sync = asyncio.create_task(self.tarea_larga())
 
-    async def tarea_larga(self, widget):
+    async def tarea_larga(self, widget=None):
         for i in range(1, self.total + 1):
             await asyncio.sleep(0.3)
             self.progress.value = i
             self.label.text = t("strava.procesando", actual=i, total=self.total)
+        # Aviso al terminar (antes se lanzaba al empezar la tarea)
+        self.lanzarNotificacion()
 
     def recolectarDatosStrava(self, widget):
         datosStrava = stravaConnect.StravaData(self)

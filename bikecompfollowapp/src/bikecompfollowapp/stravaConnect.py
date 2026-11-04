@@ -10,6 +10,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
 import sqlite3
+from pathlib import Path
 import logging
 import threading
 import requests
@@ -68,10 +69,13 @@ class StravaData:
         self.contador = 0
         self.contador2 = 0
 
-        file_pathDB = self.app.paths.data / "dbbcfu.db" 
+        # Misma BD que la app (BikeCFU/dbbcfu.db). Antes se abría paths.data/dbbcfu.db, otro
+        # fichero distinto: SQLite lo creaba vacío y fallaba con "no such table: stravaValores".
+        file_pathDB = getattr(app, "db_path", None) or Path(app.paths.data) / "BikeCFU" / "dbbcfu.db"
+        Path(file_pathDB).parent.mkdir(parents=True, exist_ok=True)
         self.sqliteConnection = sqlite3.connect(file_pathDB)
         self.cursor = self.sqliteConnection.cursor()
-        logging.info("Successfully Connected to SQLite")
+        logging.info("Successfully Connected to SQLite: %s", file_pathDB)
 
     # Open the secrets file and store the client ID and client secret as objects, separated by a comma
     # Read below to learn how to set up the app that provides you with the client ID
@@ -160,6 +164,9 @@ class StravaData:
             scope=request_scope,)  
 
         tokens = self.load_tokens()
+        if tokens is None:
+            # Sin strava_tokens.json: se intenta recuperar la sesión con el refresh_token de la BD
+            tokens = self.tokens_desde_bdd()
 
         if tokens is not None:
             access_token = self.get_valid_token()
@@ -170,8 +177,8 @@ class StravaData:
             code = self.get_strava_code(CLIENT_ID)
             print("Code final recibido:", code)   
             tokens = self.get_tokens(self.client_id, self.client_secret, code)
-            print("Tokens :", tokens) 
-            self.save_tokens(tokens)
+            if not self.save_tokens(tokens):
+                raise RuntimeError("Strava no devolvió un token válido tras la autorización")
             print("Token saved - hooray!")
             access_token = tokens["access_token"]
             print("Access Token --> ", access_token)
@@ -205,11 +212,36 @@ class StravaData:
 
         return tokens
 
-    def save_tokens(self, tokens):
-        file_path = self.app.paths.data / "strava_tokens.json" 
+    @staticmethod
+    def tokens_validos(tokens) -> bool:
+        return isinstance(tokens, dict) and bool(tokens.get("access_token")) and bool(tokens.get("refresh_token"))
+
+    def save_tokens(self, tokens) -> bool:
+        """Guarda los tokens en strava_tokens.json y el refresh_token en la BD (tabla token).
+
+        Se llama tras la autorización inicial y cada vez que se refresca el token. Si Strava
+        devolvió un error en vez de tokens, no se sobrescribe nada y devuelve False.
+        """
+        if not self.tokens_validos(tokens):
+            logging.error("Respuesta de Strava sin tokens válidos; no se guarda: %s",
+                          {k: v for k, v in (tokens or {}).items() if "token" not in k})
+            return False
+        file_path = self.app.paths.data / "strava_tokens.json"
         with open(file_path, "w") as f:
             json.dump(tokens, f)
             f.flush()
+        if not self.guardarTokenBDD(tokens["refresh_token"]):
+            logging.error("No se pudo guardar el refresh_token de Strava en la BD")
+        return True
+
+    def tokens_desde_bdd(self):
+        """Recupera la sesión con el refresh_token guardado en la BD. Devuelve los tokens o None."""
+        refresh = self.recuperarTokenBDD()
+        if refresh == "Error":
+            return None
+        logging.info("strava_tokens.json no disponible; se refresca con el token de la BD")
+        tokens = self.refresh_token(self.client_id, self.client_secret, refresh)
+        return tokens if self.save_tokens(tokens) else None
 
     def load_tokens(self):
         file_path = self.app.paths.data / "strava_tokens.json"
@@ -239,6 +271,8 @@ class StravaData:
 
     def get_valid_token(self):
         tokens = self.load_tokens()
+        if self.tokens_validos(tokens) and self.recuperarTokenBDD() != tokens["refresh_token"]:
+            self.guardarTokenBDD(tokens["refresh_token"])   # la BD siempre con el token vigente
 
         if self.token_expired(tokens):
             print("Token caducado, refrescando...")
@@ -249,7 +283,8 @@ class StravaData:
                 tokens["refresh_token"]
             )
 
-            self.save_tokens(tokens)
+            if not self.save_tokens(tokens):
+                raise RuntimeError("Strava no devolvió un token válido al refrescar")
 
         return tokens["access_token"]
 
@@ -263,79 +298,71 @@ class StravaData:
             """Copy the values between code= and & in the url that you see in the browser. """,
         )
 
-    def guardarTokenBDD(self) -> bool:
-        try:
-            self.cursor.execute("INSERT into token FROM stravaValores sv WHERE sv.fecha = ?", (fecha))
-        except sqlite3.Error as error: 
-            print("Error al insertar en Entradas: %s", error)
-            logging.error("Error al insertar en Entradas: %s", error)
-            return False
-        finally:
-            rows = self.cursor.fetchall()
-            if rows.count > 0:
-                print("Resultado del SELECT: ", rows.count)
-                print("Chequeo ha ido bien.")
-                return True
-            else:
-                return False
+    def crearTablaToken(self) -> None:
+        """Tabla de una sola fila con el refresh_token de Strava."""
+        self.cursor.execute("CREATE TABLE IF NOT EXISTS token (refresh_token TEXT)")
+        self.sqliteConnection.commit()
 
-    def actualizarTokenBDD(self, toek) -> bool:
-        try:
-            self.cursor.execute("UPDATE token SET refresh_token = ?", (toek))
-            print("UPDATE Token correcto !!")
-            logging.error("UPDATE Token correcto !!")
-        except sqlite3.Error as error: 
-            print("Error al UPDATE el token: %s", error)
-            logging.error("Error al UPDATE el token:  %s", error)
+    def guardarTokenBDD(self, refresh_token=None) -> bool:
+        """Guarda el refresh_token en la BD (sustituye el anterior). Sin argumento usa el de strava_tokens.json."""
+        if refresh_token is None:
+            refresh_token = (self.load_tokens() or {}).get("refresh_token")
+        if not refresh_token:
+            logging.warning("No hay refresh_token que guardar en la BD")
             return False
+        try:
+            self.crearTablaToken()
+            self.cursor.execute("DELETE FROM token")
+            self.cursor.execute("INSERT INTO token (refresh_token) VALUES (?)", (refresh_token,))
+            self.sqliteConnection.commit()
+        except sqlite3.Error as error:
+            self.sqliteConnection.rollback()
+            logging.error("Error al guardar el token en la BD: %s", error)
+            return False
+        logging.info("Token de Strava guardado en la BD")
+        return True
+
+    def actualizarTokenBDD(self, refresh_token) -> bool:
+        """Actualiza el refresh_token guardado; si todavía no había ninguno, lo inserta."""
+        try:
+            self.crearTablaToken()
+            self.cursor.execute("UPDATE token SET refresh_token = ?", (refresh_token,))
+            if self.cursor.rowcount == 0:
+                self.cursor.execute("INSERT INTO token (refresh_token) VALUES (?)", (refresh_token,))
+            self.sqliteConnection.commit()
+        except sqlite3.Error as error:
+            self.sqliteConnection.rollback()
+            logging.error("Error al actualizar el token en la BD: %s", error)
+            return False
+        logging.info("Token de Strava actualizado en la BD")
+        return True
 
     def recuperarTokenBDD(self) -> str:
         try:
-            self.cursor.execute("select refresh_token from token")
+            self.cursor.execute("SELECT refresh_token FROM token")
             resultado = self.cursor.fetchone()
-            refresh_token = resultado[0]
-            return refresh_token
-        except sqlite3.Error as error: 
-            print("Error al SELECT Token: %s", error)
-            logging.error("Error al SELECT Token: %s", error)
-            return "Error"            
+        except sqlite3.Error as error:
+            logging.error("Error al leer el token de la BD: %s", error)
+            return "Error"
+        return resultado[0] if resultado else "Error"
 
     def checkearTokenBDD(self) -> bool:
         try:
             self.cursor.execute("SELECT * FROM token")
-        except sqlite3.Error as error: 
-            print("Error al ejecutar la SELECT: %s", error)
-            logging.error("Error al ejecutar la SELECT: %s", error)
-            return False
-        finally:
             rows = self.cursor.fetchall()
-            if len(rows) > 0:
-                print("Resultado del SELECT: ", rows.count)
-                print("Chequeo ha ido bien.")
-                return True
-            else:
-                return False
+        except sqlite3.Error as error:
+            logging.error("Error al consultar la tabla token: %s", error)
+            return False
+        return len(rows) > 0
 
     def chequearDatosBDD(self, fecha) -> bool:
-        sqliteConnection = sqlite3.connect("./DB/dbbcfu.db")
-        cursor = sqliteConnection.cursor()
-        logging.info("Successfully Connected to SQLite")
-
         try:
-            cursor = sqliteConnection.cursor()
-            cursor.execute("SELECT * FROM stravaValores sv WHERE sv.fecha = ?", (fecha))
-        except sqlite3.Error as error: 
-            print("Error al insertar en Entradas: %s", error)
-            logging.error("Error al insertar en Entradas: %s", error)
+            self.cursor.execute("SELECT * FROM stravaValores sv WHERE sv.fecha = ?", (fecha,))
+            rows = self.cursor.fetchall()
+        except sqlite3.Error as error:
+            logging.error("Error al consultar stravaValores: %s", error)
             return False
-        finally:
-            rows = cursor.fetchall()
-            if len(rows) > 0:
-                print("Resultado del SELECT: ", rows.count)
-                print("Chequeo ha ido bien.")
-                return True
-            else:
-                return False
+        return len(rows) > 0
         
     def operacionesFecha(self) -> bool:    
         hoy = datetime.today()
@@ -425,5 +452,5 @@ class StravaData:
                 print("No se insertó ningún registro")
                 logging.warning("No se insertó ningún registro")
         except sqlite3.Error as error: 
-            print("Error al insertar en Entradas: %s", error)
-            logging.error("Error al insertar en Entradas: %s", error) 
+            print("Error al insertar en stravaValores:", error)
+            logging.error("Error al insertar en stravaValores: %s", error)
