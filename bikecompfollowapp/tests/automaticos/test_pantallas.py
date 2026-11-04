@@ -133,7 +133,9 @@ def test_estadisticas_volver_a_menu(en_menu):
 
 def test_strava_sync_abre_sincronizacion_y_vuelve_a_menu(en_menu):
     pantalla = pulsar(en_menu, "Strava Sync")
-    assert {"Iniciar", "Extraer Datos Strava"} <= set(textos_botones(pantalla))
+    assert "Extraer Datos Strava" in textos_botones(pantalla)
+    assert "Iniciar" not in textos_botones(pantalla)
+    assert widgets(pantalla, toga.DateInput)
     pantalla = pulsar(en_menu, "◀ Volver")
     assert "Mantenimiento / Paso por taller" in textos_botones(pantalla)
 

@@ -1,12 +1,10 @@
 """Tests de las notificaciones (sin lanzar notificaciones reales)."""
 
-import asyncio
 import subprocess
 
 import pytest
 
 from bikecompfollowapp import notificaciones
-from bikecompfollowapp.translations import t
 
 
 @pytest.fixture
@@ -58,22 +56,3 @@ def test_osascript_falla_no_rompe_la_app(monkeypatch):
 
     monkeypatch.setattr(notificaciones.subprocess, "run", falla)
     assert notificaciones.notificar("T", "M") is False
-
-
-def test_notificacion_se_lanza_al_terminar_la_tarea(ui, monkeypatch):
-    avisos, progreso = [], []
-    ui.total = 3
-    ui.progress = type("P", (), {})()
-    ui.label = type("L", (), {})()
-    dormir = asyncio.sleep
-    monkeypatch.setattr("bikecompfollowapp.app.asyncio.sleep", lambda s: dormir(0))
-
-    def notificar(titulo, mensaje):
-        progreso.append(ui.progress.value)
-        avisos.append((titulo, mensaje))
-        return True
-
-    monkeypatch.setattr(notificaciones, "notificar", notificar)
-    asyncio.run(ui.tarea_larga())
-    assert avisos == [(t("notificacion.titulo"), t("notificacion.fin"))]
-    assert progreso == [3], "La notificación debe llegar cuando la barra ya está al 100 %"

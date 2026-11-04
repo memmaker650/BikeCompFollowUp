@@ -12,7 +12,7 @@ from pathlib import Path
 import sys
 import sqlite3
 import logging
-from datetime import datetime
+from datetime import date, datetime, time
 
 if __name__ == "__main__" or __package__ is None:
     import notificaciones
@@ -163,6 +163,10 @@ class AppPaths:
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
+# Fecha por defecto del selector «Desde» de Strava Sync
+FECHA_INICIO_STRAVA = date(2026, 1, 1)
+
+
 class BikeCompFollowApp(toga.App):
     label_estado = ""
     cursor = None
@@ -171,6 +175,7 @@ class BikeCompFollowApp(toga.App):
     db_path = None
     log_path = None
     usuarioSeleccionado = None
+    sync_strava_en_curso = False
 
     def startup(self):
         # ✅ AQUÍ sí existe self
@@ -214,8 +219,8 @@ class BikeCompFollowApp(toga.App):
         logging.info("Dentro borrar Datos")
 
     # Método para lanzar Notificaciones
-    def lanzarNotificacion(self, titulo=None, mensaje=None) -> bool:
-        return notificaciones.notificar(titulo or t("notificacion.titulo"), mensaje or t("notificacion.fin"))
+    def lanzarNotificacion(self, titulo, mensaje) -> bool:
+        return notificaciones.notificar(titulo, mensaje)
 
     def crearDBBasica(self):
         try:
@@ -922,40 +927,96 @@ class BikeCompFollowApp(toga.App):
             return False
 
     # -------- Pantalla de sincronización con Strava --------
-    def iniciar_tarea(self, widget):
-        # Se guarda la referencia para que el recolector de basura no cancele la tarea
-        self._tarea_sync = asyncio.create_task(self.tarea_larga())
+    def _sincronizar_strava(self, fecha_desde, usuario, vehiculo, progreso=None, conexion_propia=False):
+        """Descarga las actividades desde fecha_desde y las guarda. Devuelve cuántas se guardaron.
 
-    async def tarea_larga(self, widget=None):
-        for i in range(1, self.total + 1):
-            await asyncio.sleep(0.3)
-            self.progress.value = i
-            self.label.text = t("strava.procesando", actual=i, total=self.total)
-        # Aviso al terminar (antes se lanzaba al empezar la tarea)
-        self.lanzarNotificacion()
+        progreso(fase, actual, total): fase "descargando" (total desconocido) o "guardando".
+        Se ejecuta en un hilo aparte (conexion_propia=True) para no congelar la ventana."""
+        avisar = progreso or (lambda *a: None)
+        datos = stravaConnect.StravaData(self, conexion_propia=conexion_propia)
+        try:
+            datos.initConexion()
+            datos.crearObjetoCliente()
+            hasta = datetime.now()
+            datos.extraerDatos(datetime.combine(fecha_desde, time.min), hasta,
+                               progreso=lambda n: avisar("descargando", n, None))
+            datos.guardarDatosBDD(hasta)
+            guardadas = datos.guardarActividadesBDD(usuario, vehiculo,
+                                                    progreso=lambda i, n: avisar("guardando", i, n))
+            if datos.actividades and guardadas == 0:
+                raise RuntimeError("No se pudieron guardar las actividades en la base de datos")
+            return guardadas
+        finally:
+            datos.cerrar()
 
-    def recolectarDatosStrava(self, widget):
-        datosStrava = stravaConnect.StravaData(self)
-        datosStrava.initConexion()
-        datosStrava.crearObjetoCliente()
-        datosStrava.extraerDatos(datetime(2025, 12, 31), datetime.now())
-        datosStrava.guardarDatosBDD(datetime.now())
-        datosStrava.guardarActividadesBDD(self.usuarioSeleccionado, self.vehiculoDelUsuario(self.usuarioSeleccionado))
+    def _progreso_strava(self, fase, actual, total=None):
+        if fase == "descargando":
+            # Strava no dice cuántas actividades hay: barra en movimiento + contador
+            if self.progress.max is not None:
+                self.progress.max = None
+                self.progress.start()
+            self.label.text = t("strava.descargando", actual=actual)
+        else:
+            self.progress.stop()
+            self.progress.max = max(total or 0, 1)
+            self.progress.value = actual
+            self.label.text = t("strava.guardando", actual=actual, total=total)
+
+    def _fin_sync_strava(self, texto, completa):
+        self.progress.stop()
+        self.progress.max = 1
+        self.progress.value = 1 if completa else 0
+        self.label.text = texto
+        self.lanzarNotificacion(t("notificacion.strava_titulo"), texto)
+
+    async def recolectarDatosStrava(self, widget=None):
+        if self.sync_strava_en_curso:
+            return
+        self.sync_strava_en_curso = True
+        self.boton_extraer.enabled = False
+        self.fecha_desde.enabled = False
+        usuario = self.usuarioSeleccionado
+        vehiculo = self.vehiculoDelUsuario(usuario)
+        fecha = self.fecha_desde.value or FECHA_INICIO_STRAVA
+        loop = asyncio.get_running_loop()
+
+        def progreso(fase, actual, total):   # llamado desde el hilo de descarga
+            loop.call_soon_threadsafe(self._progreso_strava, fase, actual, total)
+
+        self._progreso_strava("descargando", 0)
+        try:
+            total = await loop.run_in_executor(
+                None, self._sincronizar_strava, fecha, usuario, vehiculo, progreso, True)
+        except Exception as error:   # red, tokens, BD...: se avisa al usuario en vez de fallar en silencio
+            logging.exception("Error en Strava Sync")
+            await asyncio.sleep(0)   # que se apliquen antes los avisos de progreso pendientes
+            self._fin_sync_strava(t("strava.error", error=error), completa=False)
+        else:
+            await asyncio.sleep(0)
+            self._fin_sync_strava(t("strava.fin", total=total), completa=True)
+        finally:
+            self.boton_extraer.enabled = True
+            self.fecha_desde.enabled = True
+            self.sync_strava_en_curso = False
 
     def ir_a_pantalla_recoleccionDatos(self, widget=None):
         self._mostrar(self.barraProgresoCargaDatos())
 
     def barraProgresoCargaDatos(self):
-        self.total = 20
+        self.label = toga.Label(t("strava.pulsa_extraer"), style=Pack(margin=10))
+        self.fecha_desde = toga.DateInput(value=FECHA_INICIO_STRAVA, max=date.today(), style=Pack(margin=10))
+        self.progress = toga.ProgressBar(max=1, value=0, style=Pack(margin=10))
+        self.boton_extraer = self._boton(t("strava.extraer"), self.recolectarDatosStrava)
 
-        self.label = toga.Label(t("strava.pulsa_inicio"), style=Pack(margin=10))
-        self.progress = toga.ProgressBar(max=self.total, value=0, style=Pack(margin=10))
+        fila_fecha = toga.Box(style=Pack(direction=ROW, align_items=CENTER))
+        fila_fecha.add(toga.Label(t("strava.desde"), style=Pack(margin=10)))
+        fila_fecha.add(self.fecha_desde)
 
         box = toga.Box(style=Pack(direction=COLUMN, margin=20))
+        box.add(fila_fecha)
         box.add(self.label)
         box.add(self.progress)
-        box.add(self._boton(t("strava.iniciar"), self.iniciar_tarea))
-        box.add(self._boton(t("strava.extraer"), self.recolectarDatosStrava))
+        box.add(self.boton_extraer)
         box.add(self._barra_inferior(izquierda=self._boton_volver(self.ir_a_menu_usuario)))
         return box
 

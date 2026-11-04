@@ -2,7 +2,7 @@
 
 import sqlite3
 import time
-from datetime import datetime
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -396,7 +396,7 @@ def test_strava_sync_guarda_actividades_del_usuario(app, db, monkeypatch):
                                       get_gear=lambda gid: SimpleNamespace(name="Specialized"))
 
     monkeypatch.setattr(StravaData, "crearObjetoCliente", cliente)
-    app.recolectarDatosStrava(None)
+    app._sincronizar_strava(date(2026, 1, 1), "DaMario", app.vehiculoDelUsuario("DaMario"))
     assert db.execute("SELECT StravaID, tipo_vehiculo, elemento, user FROM ActividadesStrava").fetchall() == [
         (7, "Bici Carretera", "Specialized", "DaMario")
     ]
@@ -480,8 +480,8 @@ def test_sincronizar_dos_veces_completo_no_duplica_nada(app, db, monkeypatch):
             get_gear=lambda gid: SimpleNamespace(name="Canyon"))
 
     monkeypatch.setattr(StravaData, "crearObjetoCliente", cliente)
-    app.recolectarDatosStrava(None)
-    app.recolectarDatosStrava(None)
+    app._sincronizar_strava(date(2026, 1, 1), "DaMario", "Bici Gravel")
+    app._sincronizar_strava(date(2026, 1, 1), "DaMario", "Bici Gravel")
     assert db.execute("SELECT COUNT(*) FROM ActividadesStrava").fetchone() == (2,)
     assert db.execute("SELECT COUNT(*) FROM stravaValores").fetchone() == (1,)
 

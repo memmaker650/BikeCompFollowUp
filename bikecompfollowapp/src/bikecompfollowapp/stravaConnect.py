@@ -142,7 +142,10 @@ class StravaData:
     cursor = 0
 
     # Constructor: inicializa atributos (características)
-    def __init__(self, app):
+    def __init__(self, app, conexion_propia=False):
+        """conexion_propia=True abre una conexión nueva a la BD de la app. Es obligatorio cuando
+        StravaData se usa en un hilo distinto al de la interfaz (sqlite3 no permite compartir una
+        conexión entre hilos)."""
         self.app = app
         self.contador = 0
         self.contador2 = 0
@@ -154,14 +157,20 @@ class StravaData:
         # Si la app ya tiene la BD abierta se reutiliza su conexión: con una segunda conexión al
         # mismo fichero, cualquier cambio sin confirmar de la app provoca "database is locked".
         conexion = getattr(app, "sqliteConnection", None)
-        if isinstance(conexion, sqlite3.Connection):
+        self._conexion_propia = conexion_propia or not isinstance(conexion, sqlite3.Connection)
+        if not self._conexion_propia:
             self.sqliteConnection = conexion
         else:
             file_pathDB = getattr(app, "db_path", None) or Path(app.paths.data) / "BikeCFU" / "dbbcfu.db"
             Path(file_pathDB).parent.mkdir(parents=True, exist_ok=True)
-            self.sqliteConnection = sqlite3.connect(file_pathDB)
+            self.sqliteConnection = sqlite3.connect(file_pathDB, timeout=15)
             logging.info("Successfully Connected to SQLite: %s", file_pathDB)
         self.cursor = self.sqliteConnection.cursor()
+
+    def cerrar(self) -> None:
+        """Cierra la conexión solo si la abrió StravaData (la de la app la cierra la app)."""
+        if self._conexion_propia:
+            self.sqliteConnection.close()
 
     # Open the secrets file and store the client ID and client secret as objects, separated by a comma
     # Read below to learn how to set up the app that provides you with the client ID
@@ -480,7 +489,8 @@ class StravaData:
   
         return True
 
-    def extraerDatos(self, fecha1, fecha2, tipoActividad="Ride"):
+    def extraerDatos(self, fecha1, fecha2, tipoActividad="Ride", progreso=None):
+        """Descarga las actividades entre fecha1 y fecha2. progreso(n) se llama tras cada una."""
         self.fecha_referencia = fecha1
         self.fecha_objetivo = fecha2
         print("Fecha Referencia: ", self.fecha_referencia)
@@ -499,6 +509,8 @@ class StravaData:
 
         for actividad in self.client.get_activities(after=self.fecha_referencia, before=self.fecha_objetivo):
             self.actividades.append(actividad)
+            if progreso:
+                progreso(len(self.actividades))
             if actividad.type == tipoActividad:
                 self.total_distancia += actividad.distance  # metros
                 self.total_tiempo += actividad.moving_time
@@ -545,11 +557,15 @@ class StravaData:
                 cache[gear_id] = gear_id
         return cache[gear_id]
 
-    def guardarActividadesBDD(self, usuario, tipo_vehiculo=None, actividades=None) -> int:
-        """Guarda (o actualiza si ya existían) las actividades en ActividadesStrava. Devuelve cuántas."""
-        actividades = self.actividades if actividades is None else actividades
-        filas = [
-            (
+    def guardarActividadesBDD(self, usuario, tipo_vehiculo=None, actividades=None, progreso=None) -> int:
+        """Guarda (o actualiza si ya existían) las actividades en ActividadesStrava. Devuelve cuántas.
+
+        progreso(actual, total) se llama tras preparar cada actividad (incluye pedir a Strava el
+        nombre de la bici, que es la parte lenta)."""
+        actividades = [a for a in (self.actividades if actividades is None else actividades) if a.id is not None]
+        filas = []
+        for numero, actividad in enumerate(actividades, start=1):
+            filas.append((
                 actividad.id,                                           # -> StravaID
                 _texto(actividad.type),
                 _numero(actividad.distance, 1 / 1000),                  # m -> km
@@ -559,10 +575,9 @@ class StravaData:
                 None if (_texto(actividad.type) or "").lower() in TIPOS_SIN_VEHICULO else tipo_vehiculo,
                 self.nombreEquipo(getattr(actividad, "gear_id", None)),
                 usuario,
-            )
-            for actividad in actividades
-            if actividad.id is not None
-        ]
+            ))
+            if progreso:
+                progreso(numero, len(actividades))
         if not self.crearTablaActividades():
             return 0
         try:

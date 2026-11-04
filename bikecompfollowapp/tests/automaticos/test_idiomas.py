@@ -86,7 +86,7 @@ def test_t_con_marcadores():
     translations.set_language("en")
     assert t("menu.usuario", usuario="Ana") == "User: Ana"
     translations.set_language("fr")
-    assert t("strava.procesando", actual=2, total=5) == "Traitement 2 sur 5"
+    assert t("strava.guardando", actual=2, total=5) == "Enregistrement de l'activité 2 sur 5"
 
 
 def test_clave_inexistente_devuelve_la_clave():
