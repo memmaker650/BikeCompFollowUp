@@ -23,6 +23,7 @@
     <text key="menu.usuario">Usuario: {usuario}</text>
     <text key="menu.estadisticas">Estadísticas</text>
     <text key="aviso.titulo">Alerta</text>
+    <text key="aviso.aceptar">Aceptar</text>
     <text key="aviso.urgentes">Componentes a cambiar de manera urgente :</text>
     <text key="menu.mantenimiento">Mantenimiento / Paso por taller</text>
     <text key="menu.strava">Strava Sync</text>
@@ -140,6 +141,7 @@
     <text key="menu.usuario">User: {usuario}</text>
     <text key="menu.estadisticas">Statistics</text>
     <text key="aviso.titulo">Alert</text>
+    <text key="aviso.aceptar">OK</text>
     <text key="aviso.urgentes">Components to replace urgently:</text>
     <text key="menu.mantenimiento">Maintenance / Workshop visit</text>
     <text key="menu.strava">Strava Sync</text>
@@ -249,6 +251,7 @@
     <text key="menu.usuario">Utilisateur : {usuario}</text>
     <text key="menu.estadisticas">Statistiques</text>
     <text key="aviso.titulo">Alerte</text>
+    <text key="aviso.aceptar">OK</text>
     <text key="aviso.urgentes">Composants à remplacer d'urgence :</text>
     <text key="menu.mantenimiento">Entretien / Passage à l'atelier</text>
     <text key="menu.strava">Strava Sync</text>

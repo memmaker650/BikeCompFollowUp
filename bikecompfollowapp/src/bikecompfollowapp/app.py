@@ -5,7 +5,7 @@ App to follow up bike comp, sneakers and car comp to avoid breaks.
 import toga
 from toga.style import Pack
 from toga.style.pack import CENTER, COLUMN, ROW, LEFT
-from toga.colors import color as parse_color, rgb
+from toga.colors import Color, rgb
 from toga.sources import AccessorColumn
 
 from pathlib import Path
@@ -23,6 +23,7 @@ else:
     from . import notificaciones, stravaConnect, translations
 t = translations.t
 import asyncio
+from contextlib import contextmanager
 
 # ---- Medidas de interfaz (Toga trabaja en píxeles; 1 cm ≈ 38 px a 96 ppp) ----
 ANCHO_CAMPO = 250
@@ -35,6 +36,13 @@ DISTANCIA_LIMITE_DEFECTO = 5000
 TIEMPO_LIMITE_DEFECTO = 500
 AZUL = rgb(0, 102, 204)
 COLOR_ESTADISTICAS = "#FF8C00"
+# Espera ante una BD bloqueada por otro programa: la de sqlite3 por defecto y la corta de Estadísticas
+ESPERA_BD_MS = 5000
+ESPERA_CORTA_BD_MS = 500
+# Ventana de Alerta (componentes a cambiar de manera urgente)
+ROJO_ALERTA = rgb(220, 0, 0)
+TAMANO_TITULO_ALERTA = 24
+TAMANO_VENTANA_ALERTA = (420, 260)
 COLOR_MANTENIMIENTO = "#1E64C8"
 
 # Componentes de prueba para la ventana de Alerta del menú del usuario (ver componentesUrgentes)
@@ -204,7 +212,7 @@ def pintar_fondo_boton(boton, color_hex):
         return False
     try:
         from toga_cocoa.libs import NSColor
-        c = parse_color(color_hex)
+        c = Color.parse(color_hex)
         nativo.bordered = False
         nativo.wantsLayer = True
         nativo.layer.backgroundColor = NSColor.colorWithRed(
@@ -351,6 +359,16 @@ def crearComponentesPorDefecto(conexion, usuario=None) -> int:
     return creados
 
 
+@contextmanager
+def espera_corta(conexion, milisegundos=ESPERA_CORTA_BD_MS):
+    """Mientras dura, una escritura bloqueada por otro programa falla en `milisegundos` en vez de esperar 5 s."""
+    conexion.execute(f"PRAGMA busy_timeout = {int(milisegundos)}")
+    try:
+        yield conexion
+    finally:
+        conexion.execute(f"PRAGMA busy_timeout = {ESPERA_BD_MS}")
+
+
 def calcularKmComponentes(conexion, usuario=None) -> int:
     """Suma los km de las actividades Strava (tipo Ride, desde la fecha de alta) a cada componente y lo
     guarda en datosComponente. usuario=None calcula todos. Devuelve cuántos componentes se han actualizado."""
@@ -388,7 +406,7 @@ catalogo AS (
     WHERE lower(elemento) NOT IN (SELECT lower(nombre) FROM Componente WHERE nombre IS NOT NULL)
 )
 SELECT COALESCE(u.elemento, c.nombre), u.descripcion, u.fechaInsercion, u.distanciaLimite,
-       dc.km, u.tiempoLimite, dc.horas, u.mesesLimite,
+       dc.km, u.tiempoLimite, dc.horas, {meses_limite},
        -- meses completos desde el alta hasta hoy
        CASE WHEN date(u.fechaInsercion) IS NOT NULL THEN
            (CAST(strftime('%Y', 'now', 'localtime') AS INTEGER) - CAST(strftime('%Y', u.fechaInsercion) AS INTEGER)) * 12
@@ -879,25 +897,49 @@ class BikeCompFollowApp(toga.App):
         return "\n".join([t("aviso.urgentes"), ""] + [f"• {componente}" for componente in componentes])
 
     def mostrarAlertaComponentes(self, usuario):
-        """Abre la ventana de Alerta si hay componentes urgentes. Devuelve el diálogo (o None si no hay)."""
+        """Abre la ventana de Alerta si hay componentes urgentes. Devuelve su contenido (o None si no hay).
+
+        Es una ventana propia y no un toga.InfoDialog porque el diálogo nativo (NSAlert en macOS) no deja
+        cambiar el color ni el tamaño del título."""
         componentes = self.componentesUrgentes(usuario)
         if not componentes:
             return None
-        titulo, mensaje = t("aviso.titulo"), self.textoAlertaComponentes(componentes)
-        dialogo = toga.InfoDialog(titulo, mensaje)
-        dialogo.titulo, dialogo.mensaje = titulo, mensaje   # Toga no los guarda: para el log y los tests
         logging.info("Alerta de componentes urgentes (%s): %s", usuario, ", ".join(componentes))
-        self._abrir_dialogo(dialogo)
-        return dialogo
+        contenido = self.construirVentanaAlerta(componentes)
+        self._abrir_ventana_alerta(contenido)
+        return contenido
 
-    def _abrir_dialogo(self, dialogo):
-        """Abre un diálogo sin bloquear: se lanza como tarea del bucle de eventos de Toga."""
-        try:
-            bucle = asyncio.get_running_loop()
-        except RuntimeError:   # fuera del bucle de eventos (p. ej. en tests síncronos)
-            logging.warning("No hay bucle de eventos: no se muestra el diálogo %s", getattr(dialogo, "titulo", ""))
-            return None
-        return bucle.create_task(self.main_window.dialog(dialogo))
+    def construirVentanaAlerta(self, componentes):
+        """Contenido de la ventana: 'Alerta' en rojo y tamaño 24, el texto, la lista y el botón Aceptar."""
+        self.label_titulo_alerta = toga.Label(
+            t("aviso.titulo"),
+            style=Pack(color=ROJO_ALERTA, font_size=TAMANO_TITULO_ALERTA, font_weight="bold", margin_bottom=10),
+        )
+        self.label_mensaje_alerta = toga.Label(self.textoAlertaComponentes(componentes), style=Pack(font_size=14))
+        self.boton_aceptar_alerta = toga.Button(
+            t("aviso.aceptar"), on_press=self.cerrar_ventana_alerta, style=Pack(width=120, margin_top=20))
+        return toga.Box(
+            children=[
+                self.label_titulo_alerta,
+                self.label_mensaje_alerta,
+                toga.Box(style=Pack(flex=1)),
+                toga.Box(children=[toga.Box(style=Pack(flex=1)), self.boton_aceptar_alerta], style=Pack(direction=ROW)),
+            ],
+            style=Pack(direction=COLUMN, margin=20),
+        )
+
+    def _abrir_ventana_alerta(self, contenido):
+        self.ventana_alerta = toga.Window(
+            title=t("aviso.titulo"), size=TAMANO_VENTANA_ALERTA, resizable=False, minimizable=False,
+            content=contenido,
+        )
+        self.ventana_alerta.show()
+
+    def cerrar_ventana_alerta(self, widget=None):
+        ventana = getattr(self, "ventana_alerta", None)
+        if ventana is not None:
+            ventana.close()
+        self.ventana_alerta = None
 
     # -------- Pantallas de mantenimiento (cuadrículas de componentes) --------
     def construir_pantalla_mantenimiento(self, clave):
@@ -1125,10 +1167,28 @@ class BikeCompFollowApp(toga.App):
             return -1
 
     def componentesEstadisticas(self, usuario):
-        """Filas de la tabla 1 de Estadísticas: un componente por línea (ver SQL_COMPONENTES_ESTADISTICAS)."""
-        self.calcularKmComponentes(usuario)   # km al día con las actividades y altas actuales
-        asegurarColumnasArchivosComponentes(self.sqliteConnection)
-        filas = self.sqliteConnection.execute(SQL_COMPONENTES_ESTADISTICAS, (usuario,)).fetchall()
+        """Filas de la tabla 1 de Estadísticas: un componente por línea (ver SQL_COMPONENTES_ESTADISTICAS).
+
+        Lo único imprescindible son los nombres de la tabla Componente. Migraciones, componentes POR DEFECTO
+        y cálculo de km son extras: si fallan (p. ej. 'database is locked' porque otro programa tiene la BD
+        abierta con cambios sin guardar) se registra en el log y la tabla se pinta igualmente."""
+        conexion = self.sqliteConnection
+        with espera_corta(conexion):     # no congelar la pantalla 5 s por cada escritura bloqueada
+            try:
+                asegurarColumnasArchivosComponentes(conexion)
+            except sqlite3.Error as error:
+                logging.warning("No se pudo actualizar archivoscomponentes antes de Estadísticas: %s", error)
+            self.calcularKmComponentes(usuario)   # km al día con las actividades y altas actuales
+        try:
+            columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(archivoscomponentes)")}
+            sql = SQL_COMPONENTES_ESTADISTICAS.format(
+                meses_limite="u.mesesLimite" if "mesesLimite" in columnas else "NULL")
+            filas = conexion.execute(sql, (usuario,)).fetchall()
+        except sqlite3.Error as error:
+            logging.error("Error al leer los datos de los componentes; se muestran solo los nombres: %s", error)
+            vacias = (None,) * (len(COLUMNAS_COMPONENTES) - 1)
+            filas = [(nombre, *vacias) for (nombre,) in conexion.execute(
+                "SELECT DISTINCT nombre FROM Componente WHERE trim(COALESCE(nombre, '')) <> ''")]
         return sorted(filas, key=lambda fila: orden_alfabetico(fila[0]))
 
     def ir_a_pantalla_tres(self, widget, valor):

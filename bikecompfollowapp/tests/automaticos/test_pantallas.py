@@ -1,7 +1,10 @@
 """Tests de navegación entre pantallas (backend toga_dummy, sin ventanas reales)."""
 
+from types import SimpleNamespace
+
 import pytest
 import toga
+from toga.colors import rgb
 
 from bikecompfollowapp import translations
 from bikecompfollowapp.translations import t
@@ -447,17 +450,27 @@ def test_estadisticas_meses(en_menu, db):
 
 @pytest.fixture
 def dialogos(con_usuario, monkeypatch):
+    """Ventanas de Alerta abiertas (su contenido); en los tests no se crea una ventana real."""
     abiertos = []
-    monkeypatch.setattr(type(con_usuario), "_abrir_dialogo", lambda self, dialogo: abiertos.append(dialogo))
+    monkeypatch.setattr(type(con_usuario), "_abrir_ventana_alerta", lambda self, contenido: abiertos.append(contenido))
     return abiertos
 
 
 def test_menu_abre_alerta_con_componentes_urgentes(con_usuario, dialogos):
     pulsar(con_usuario, f"{USUARIO}-Damián Vega")
     assert len(dialogos) == 1
-    assert dialogos[0].titulo == "Alerta"
-    assert dialogos[0].mensaje.splitlines() == [
-        "Componentes a cambiar de manera urgente :", "", "• Cadena", "• Pastillas de Freno"]
+    assert textos_labels(dialogos[0]) == [
+        "Alerta", "Componentes a cambiar de manera urgente :\n\n• Cadena\n• Pastillas de Freno"]
+    assert "Aceptar" in textos_botones(dialogos[0])
+
+
+def test_titulo_alerta_en_rojo_y_tamano_24(con_usuario, dialogos):
+    pulsar(con_usuario, f"{USUARIO}-Damián Vega")
+    titulo = con_usuario.label_titulo_alerta
+    assert titulo.text == "Alerta"
+    assert titulo.style.color == rgb(220, 0, 0)
+    assert titulo.style.font_size == 24
+    assert con_usuario.label_mensaje_alerta.style.color is None, "Solo el título va en rojo"
 
 
 def test_alerta_se_muestra_tambien_al_volver_al_menu(con_usuario, dialogos):
@@ -476,12 +489,18 @@ def test_sin_componentes_urgentes_no_hay_alerta(con_usuario, dialogos, monkeypat
 def test_alerta_traducida(con_usuario, dialogos):
     translations.set_language("en")
     con_usuario.ir_a_menu_usuario(None, USUARIO)
-    assert dialogos[0].titulo == "Alert"
-    assert dialogos[0].mensaje.startswith("Components to replace urgently:")
+    assert textos_labels(dialogos[0])[0] == "Alert"
+    assert textos_labels(dialogos[0])[1].startswith("Components to replace urgently:")
+    assert "OK" in textos_botones(dialogos[0])
 
 
-def test_abrir_dialogo_sin_bucle_no_rompe(en_menu):
-    assert en_menu._abrir_dialogo(toga.InfoDialog("t", "m")) is None
+def test_aceptar_cierra_la_ventana_de_alerta(con_usuario, dialogos):
+    cerradas = []
+    con_usuario.ventana_alerta = SimpleNamespace(close=lambda: cerradas.append(True))
+    con_usuario.construirVentanaAlerta(["Cadena"])
+    con_usuario.boton_aceptar_alerta._impl.simulate_press()
+    assert cerradas == [True] and con_usuario.ventana_alerta is None
+    con_usuario.cerrar_ventana_alerta()                       # sin ventana abierta: no falla
 
 
 def test_pintar_fondo_boton_solo_en_cocoa(en_menu):
