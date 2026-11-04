@@ -945,6 +945,7 @@ class BikeCompFollowApp(toga.App):
                                                     progreso=lambda i, n: avisar("guardando", i, n))
             if datos.actividades and guardadas == 0:
                 raise RuntimeError("No se pudieron guardar las actividades en la base de datos")
+            datos.quitarActividadesDuplicadas()   # tras la carga: mismo StravaID y usuario -> se queda el id menor
             return guardadas
         finally:
             datos.cerrar()

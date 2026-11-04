@@ -83,6 +83,20 @@ def asegurarTablaActividades(conexion) -> None:
     conexion.commit()
 
 
+def quitarActividadesDuplicadas(conexion) -> int:
+    """Borra de ActividadesStrava las filas con el mismo StravaID y el mismo usuario, dejando
+    solo la de id menor. Devuelve cuántas filas se han borrado."""
+    cursor = conexion.execute("""DELETE FROM ActividadesStrava WHERE id NOT IN (
+                                     SELECT MIN(id) FROM ActividadesStrava GROUP BY StravaID, user)""")
+    conexion.commit()
+    borradas = cursor.rowcount
+    if borradas:
+        logging.warning("Borradas %d actividades duplicadas de ActividadesStrava", borradas)
+    else:
+        logging.info("ActividadesStrava sin actividades duplicadas")
+    return borradas
+
+
 # Actividades sin bici ni otro vehículo: se guardan con tipo_vehiculo = NULL
 TIPOS_SIN_VEHICULO = {"run", "walk"}
 
@@ -597,6 +611,14 @@ class StravaData:
             return 0
         logging.info("Guardadas %d actividades de Strava de %s", len(filas), usuario)
         return len(filas)
+
+    def quitarActividadesDuplicadas(self) -> int:
+        try:
+            return quitarActividadesDuplicadas(self.sqliteConnection)
+        except sqlite3.Error as error:
+            self.sqliteConnection.rollback()
+            logging.error("Error al quitar actividades duplicadas: %s", error)
+            return 0
 
     def guardarDatosBDD(self, fecha) -> bool:
         """Guarda el resumen en stravaValores. Una fila por día y tipo: si ya había una (otra

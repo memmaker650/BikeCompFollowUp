@@ -523,3 +523,50 @@ def test_migracion_tabla_antigua_sin_stravaid(tmp_path):
     tablas = {f[0] for f in conexion.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "ActividadesStrava_antigua" not in tablas
     conexion.close()
+
+
+# ---- Quitar actividades duplicadas ----
+
+@pytest.fixture
+def tabla_sin_unique(tmp_path):
+    """ActividadesStrava sin la restricción UNIQUE, para poder tener duplicados."""
+    conexion = sqlite3.connect(tmp_path / "dups.db")
+    conexion.execute("CREATE TABLE ActividadesStrava (id INTEGER PRIMARY KEY, StravaID INTEGER, tipo TEXT, user TEXT)")
+    yield conexion
+    conexion.close()
+
+
+def test_quita_duplicados_mismo_stravaid_y_usuario_deja_id_menor(tabla_sin_unique):
+    tabla_sin_unique.executemany("INSERT INTO ActividadesStrava (id, StravaID, tipo, user) VALUES (?, ?, 'Ride', ?)", [
+        (1, 100, "DaMario"),
+        (2, 200, "DaMario"),
+        (3, 100, "DaMario"),     # duplicada de 1 -> se borra
+        (4, 100, "Lucía"),       # mismo StravaID pero otro usuario -> se queda
+        (5, 200, "DaMario"),     # duplicada de 2 -> se borra
+        (6, 100, "DaMario"),     # duplicada de 1 -> se borra
+        (7, 300, None),
+        (8, 300, None),          # mismo StravaID, ambos sin usuario -> se borra
+    ])
+    assert stravaConnect.quitarActividadesDuplicadas(tabla_sin_unique) == 4
+    assert tabla_sin_unique.execute("SELECT id, StravaID, user FROM ActividadesStrava ORDER BY id").fetchall() == [
+        (1, 100, "DaMario"), (2, 200, "DaMario"), (4, 100, "Lucía"), (7, 300, None)
+    ]
+    assert stravaConnect.quitarActividadesDuplicadas(tabla_sin_unique) == 0     # idempotente
+
+
+def test_quitar_duplicados_sin_duplicados_no_borra(strava_app, db):
+    strava_app.guardarActividadesBDD("DaMario", None, [actividad_strava(1), actividad_strava(2)])
+    assert strava_app.quitarActividadesDuplicadas() == 0
+    assert db.execute("SELECT COUNT(*) FROM ActividadesStrava").fetchone() == (2,)
+
+
+def test_quitar_duplicados_se_ejecuta_tras_la_carga(app, monkeypatch):
+    orden = []
+    monkeypatch.setattr(StravaData, "initConexion", lambda self: None)
+    monkeypatch.setattr(StravaData, "crearObjetoCliente", lambda self: setattr(self, "client", SimpleNamespace(
+        get_activities=lambda after, before: [actividad_strava(1)], get_gear=lambda gid: SimpleNamespace(name="x"))))
+    original = StravaData.guardarActividadesBDD
+    monkeypatch.setattr(StravaData, "guardarActividadesBDD", lambda self, *a, **k: orden.append("carga") or original(self, *a, **k))
+    monkeypatch.setattr(StravaData, "quitarActividadesDuplicadas", lambda self: orden.append("duplicados") or 0)
+    app._sincronizar_strava(date(2026, 1, 1), "DaMario", None)
+    assert orden == ["carga", "duplicados"]
