@@ -179,12 +179,11 @@ def test_navegacion_subpantallas(en_menu, ruta, clave):
     for texto in ruta:
         pantalla = pulsar(en_menu, texto)
 
-    titulo, filas, alto, _ = PANTALLAS_MANTENIMIENTO[clave]
+    titulo, filas, _ = PANTALLAS_MANTENIMIENTO[clave]
     assert t(titulo) in textos_labels(pantalla)
     botones = [b for b in widgets(pantalla, toga.Button) if b.text != "◀ Volver"]
     assert [b.text for b in botones] == [t(c) for fila in filas for c in fila], "Se pintan todas las filas"
-    if alto:
-        assert all(b.style.height == alto for b in botones)
+    assert all(b.style.height == modulo_app.ALTO_BOTON_GRANDE for b in botones)
 
 
 def test_volver_recorre_las_subpantallas_hasta_el_menu(en_menu):
@@ -262,9 +261,9 @@ def test_definicion_subpantallas_coherente():
         assert destino in PANTALLAS_MANTENIMIENTO
         filas_origen = PANTALLAS_MANTENIMIENTO[origen][1]
         assert any(texto in fila for fila in filas_origen), f"'{texto}' no es un botón de '{origen}'"
-        assert PANTALLAS_MANTENIMIENTO[destino][3] == origen, "Volver debe regresar a la pantalla de origen"
+        assert PANTALLAS_MANTENIMIENTO[destino][2] == origen, "Volver debe regresar a la pantalla de origen"
 
-    for clave, (_, _, _, anterior) in PANTALLAS_MANTENIMIENTO.items():
+    for clave, (_, _, anterior) in PANTALLAS_MANTENIMIENTO.items():
         assert anterior is None or anterior in PANTALLAS_MANTENIMIENTO, clave
 
 
@@ -781,3 +780,18 @@ def test_selector_de_fecha_debajo_de_mecanico_en_fecha(preparacion):
     columna_hoy = preparacion.boton_mecanico_hoy.parent
     assert preparacion.selector_fecha_mecanico not in widgets(columna_hoy)
     assert columna_hoy.parent is columna.parent and columna_hoy.parent.style.direction == "row"
+
+
+@pytest.mark.parametrize("ruta", [[], ["Otros"], ["Otros", "Otros"], ["Otros", "RODAMIENTOS"], ["Otros", "TUBELESS"]])
+def test_botones_de_componentes_con_el_formato_de_la_pantalla_previa(en_menu, ruta):
+    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    previa = en_menu.boton_mecanico_hoy.style
+    pulsar(en_menu, "MECÁNICO HOY")
+    pulsar(en_menu, "ROAD")
+    pantalla = pulsar(en_menu, "Continuar ▶")
+    for texto in ruta:
+        pantalla = pulsar(en_menu, texto)
+    botones = [b for b in widgets(pantalla, toga.Button) if b.text != "◀ Volver"]
+    for b in botones:
+        assert (b.style.height, b.style.font_size, b.style.font_weight, b.style.flex) == (
+            previa.height, previa.font_size, previa.font_weight, previa.flex), b.text

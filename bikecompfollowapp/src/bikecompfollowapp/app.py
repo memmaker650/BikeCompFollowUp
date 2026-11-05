@@ -44,7 +44,9 @@ COLOR_MANTENIMIENTO = "#1E64C8"
 # Pantalla previa a Mantenimiento: cuándo es el paso por taller y con qué bici
 MECANICO_HOY, MECANICO_EN_FECHA = "hoy", "fecha"
 MODALIDADES_MANTENIMIENTO = ("Road", "MTB", "Gravel")      # valores de ActividadesStrava.Modalidad
-ALTO_BOTON_PREPARACION = 90
+# Botones grandes de la pantalla previa y de las cuadrículas de componentes (mismo formato en ambas)
+ALTO_BOTON_GRANDE = 90
+ESTILO_BOTON_GRANDE = dict(flex=1, height=ALTO_BOTON_GRANDE, font_size=16, font_weight="bold")
 COLOR_SELECCIONADO = COLOR_MANTENIMIENTO                     # fondo del botón elegido
 
 # Componentes de prueba para la ventana de Alerta del menú del usuario (ver componentesUrgentes)
@@ -112,7 +114,7 @@ PANTALLA_MANTENIMIENTO = "mantenimiento"
 
 # Todos los textos son claves de translations_data.xml. El componente se guarda en la BD con el
 # texto del idioma por defecto (castellano), sea cual sea el idioma de la pantalla.
-# clave -> (título, filas de botones, alto de botón o None, pantalla anterior o None = menú usuario)
+# clave -> (título, filas de botones, pantalla anterior o None = pantalla previa de Mantenimiento)
 PANTALLAS_MANTENIMIENTO = {
     PANTALLA_MANTENIMIENTO: (
         "menu.mantenimiento",
@@ -120,7 +122,6 @@ PANTALLAS_MANTENIMIENTO = {
             ["taller.cadena", "taller.pastillas", "taller.cubiertas", "taller.tubeless"],
             ["taller.cinta", "taller.disco", "taller.rodamientos", "taller.otros"],
         ],
-        None,
         None,
     ),
     "componentes": (
@@ -130,7 +131,6 @@ PANTALLAS_MANTENIMIENTO = {
             ["pieza.cinta", "pieza.disco", "pieza.rodamientos"],
             ["pieza.horquilla", "pieza.suspension", "pieza.otros"],
         ],
-        150,
         PANTALLA_MANTENIMIENTO,
     ),
     "otros": (
@@ -140,7 +140,6 @@ PANTALLAS_MANTENIMIENTO = {
             ["pieza.pinonera", "pieza.platos", "pieza.manetas", "pieza.pedales"],
             ["pieza.engrase", "pieza.tija", "pieza.sillin", "pieza.pedales", "pieza.engrase_ejes"],
         ],
-        150,
         "componentes",
     ),
     "rodamientos": (
@@ -149,7 +148,6 @@ PANTALLAS_MANTENIMIENTO = {
             ["pieza.direccion_sup", "pieza.direccion_inf", "pieza.rueda_del_int", "pieza.rueda_del_ext"],
             ["pieza.rueda_tra_int", "pieza.rueda_tra_ext"],
         ],
-        150,
         "componentes",
     ),
     "tubeless": (
@@ -158,7 +156,6 @@ PANTALLAS_MANTENIMIENTO = {
             ["pieza.liquido", "pieza.pinchazo"],
             ["pieza.cinta_tubeless", "pieza.anadido"],
         ],
-        150,
         "componentes",
     ),
 }
@@ -483,10 +480,8 @@ class BikeCompFollowApp(toga.App):
 
     # -------- Pantallas de mantenimiento (cuadrículas de componentes) --------
     def construir_pantalla_mantenimiento(self, clave):
-        titulo, filas, alto_boton, _anterior = PANTALLAS_MANTENIMIENTO[clave]
-        estilo_boton = dict(flex=1, font_size=14)
-        if alto_boton:
-            estilo_boton["height"] = alto_boton
+        titulo, filas, _anterior = PANTALLAS_MANTENIMIENTO[clave]
+        estilo_boton = ESTILO_BOTON_GRANDE      # mismo formato que MECÁNICO HOY / ROAD / MTB / GRAVEL
 
         rejilla = toga.Box(style=Pack(direction=COLUMN, flex=1))
         for n, textos in enumerate(filas):
@@ -524,7 +519,7 @@ class BikeCompFollowApp(toga.App):
         self._mostrar(self.construir_pantalla_mantenimiento(clave))
 
     def volver_desde_mantenimiento(self, clave):
-        anterior = PANTALLAS_MANTENIMIENTO[clave][3]
+        anterior = PANTALLAS_MANTENIMIENTO[clave][2]
         if anterior is None:
             self.volver_a_preparacion_mantenimiento()
         else:
@@ -549,7 +544,7 @@ class BikeCompFollowApp(toga.App):
         modalidad = getattr(self, "modalidad_mantenimiento", None)
 
         def boton(texto, elegido, accion):
-            estilo = dict(flex=1, height=ALTO_BOTON_PREPARACION, font_size=16, font_weight="bold")
+            estilo = dict(ESTILO_BOTON_GRANDE)
             if elegido:
                 estilo.update(background_color=COLOR_SELECCIONADO, color="#FFFFFF")
             b = toga.Button(texto, on_press=accion, style=Pack(**estilo))
