@@ -317,8 +317,9 @@ from stravalib.model import SummaryActivity  # noqa: E402
 
 
 def actividad_strava(id_, tipo="Ride", metros=42_195.0, segundos=5400, desnivel=512.3, ms=7.8, gear="b1",
-                     fecha="2026-03-15T23:30:00"):
-    return SummaryActivity(id=id_, type=tipo, distance=metros, moving_time=segundos,
+                     fecha="2026-03-15T23:30:00", deporte=None):
+    """deporte = sport_type de Strava; si no se indica, el mismo que tipo."""
+    return SummaryActivity(id=id_, type=tipo, sport_type=deporte or tipo, distance=metros, moving_time=segundos,
                            total_elevation_gain=desnivel, average_speed=ms, gear_id=gear,
                            start_date_local=fecha)
 
@@ -334,7 +335,7 @@ def test_tabla_actividades_strava_columnas(app, tablas):
     assert "ActividadesStrava" in tablas(app.sqliteConnection)
     columnas = {fila[1]: fila[2] for fila in app.sqliteConnection.execute("PRAGMA table_info(ActividadesStrava)")}
     assert columnas == {
-        "id": "INTEGER", "StravaID": "INTEGER", "tipo": "TEXT", "distancia": "FLOAT", "altimetria": "FLOAT", "duracion": "FLOAT",
+        "id": "INTEGER", "StravaID": "INTEGER", "tipo": "TEXT", "Modalidad": "TEXT", "distancia": "FLOAT", "altimetria": "FLOAT", "duracion": "FLOAT",
         "velocidad_media": "FLOAT", "tipo_vehiculo": "TEXT", "elemento": "TEXT", "user": "TEXT",
         "fecha": "TEXT",
     }
@@ -343,7 +344,7 @@ def test_tabla_actividades_strava_columnas(app, tablas):
 def test_guardar_actividades_con_unidades(strava_app, db):
     assert strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(111)]) == 1
     assert db.execute("SELECT * FROM ActividadesStrava").fetchall() == [
-        (1, 111, "Ride", 42.2, 512.3, 1.5, 28.08, "Bici Gravel", "Bici b1", "DaMario", "2026-03-15")
+        (1, 111, "Ride", "Road", "2026-03-15", 42.2, 512.3, 1.5, 28.08, "Bici Gravel", "Bici b1", "DaMario")
     ]
 
 
@@ -598,3 +599,128 @@ def test_tabla_sin_fecha_se_migra_y_resincronizar_la_rellena(strava_app, db):
     assert db.execute("SELECT StravaID, distancia, fecha FROM ActividadesStrava").fetchall() == [(7, 10.0, None)]
     strava_app.guardarActividadesBDD("DaMario", None, [actividad_strava(7, metros=10_000.0)])
     assert db.execute("SELECT StravaID, fecha FROM ActividadesStrava").fetchall() == [(7, "2026-03-15")]
+
+
+# ---- Columna Modalidad (MTB / Gravel / Road / NULL) ----
+
+def test_modalidad_va_justo_despues_de_tipo(app):
+    columnas = [f[1] for f in app.sqliteConnection.execute("PRAGMA table_info(ActividadesStrava)")]
+    assert columnas[columnas.index("tipo") + 1] == "Modalidad"
+
+
+@pytest.mark.parametrize("tipo, deporte, modalidad", [
+    ("Ride", "MountainBikeRide", "MTB"),      # Bicicleta de montaña
+    ("EBikeRide", "EMountainBikeRide", "MTB"),
+    ("Ride", "GravelRide", "Gravel"),         # Bicicleta de gravilla
+    ("Ride", "Ride", "Road"),                 # Bicicleta de carretera
+    ("EBikeRide", "EBikeRide", "Road"),
+    ("Run", "Run", None), ("Run", "TrailRun", None), ("Walk", "Walk", None), ("Hike", "Hike", None),
+    ("Workout", "Workout", None), ("WeightTraining", "WeightTraining", None), ("VirtualRide", "VirtualRide", None),
+])
+def test_modalidad_segun_el_deporte_de_strava(strava_app, db, tipo, deporte, modalidad):
+    strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(1, tipo, deporte=deporte)])
+    assert db.execute("SELECT tipo, Modalidad FROM ActividadesStrava").fetchone() == (tipo, modalidad)
+
+
+def test_modalidad_sin_sport_type_usa_type(strava_app, db):
+    actividad = SummaryActivity(id=5, type="Ride", distance=1000.0, moving_time=60, start_date_local="2026-03-01T10:00:00")
+    strava_app.guardarActividadesBDD("DaMario", None, [actividad])
+    assert db.execute("SELECT Modalidad FROM ActividadesStrava").fetchone() == ("Road",)
+
+
+def test_modalidad_solo_admite_los_tres_valores_o_null(app):
+    con = app.sqliteConnection
+    con.execute("INSERT INTO ActividadesStrava (StravaID, Modalidad) VALUES (1, NULL)")
+    with pytest.raises(sqlite3.IntegrityError):
+        con.execute("INSERT INTO ActividadesStrava (StravaID, Modalidad) VALUES (2, 'Carretera')")
+
+
+def test_resincronizar_actualiza_la_modalidad(strava_app, db):
+    strava_app.guardarActividadesBDD("DaMario", None, [actividad_strava(1, deporte="Ride")])
+    strava_app.guardarActividadesBDD("DaMario", None, [actividad_strava(1, deporte="GravelRide")])
+    assert db.execute("SELECT Modalidad FROM ActividadesStrava").fetchall() == [("Gravel",)]
+
+
+def test_tabla_sin_modalidad_se_rehace_conservando_filas(strava_app, db):
+    conexion = strava_app.sqliteConnection
+    conexion.execute("DROP TABLE ActividadesStrava")
+    conexion.execute(SQL_CREAR_ACTIVIDADES.replace(
+        "    Modalidad TEXT CHECK (Modalidad IN ('MTB', 'Gravel', 'Road')),\n", ""))
+    conexion.execute("INSERT INTO ActividadesStrava (id, StravaID, tipo, distancia, user, fecha) "
+                     "VALUES (4, 77, 'Ride', 33.3, 'DaMario', '2026-02-02')")
+    conexion.commit()
+    asegurarTablaActividades(conexion)
+    asegurarTablaActividades(conexion)                       # idempotente
+    columnas = [f[1] for f in conexion.execute("PRAGMA table_info(ActividadesStrava)")]
+    assert columnas[columnas.index("tipo") + 1] == "Modalidad"
+    assert db.execute("SELECT id, StravaID, tipo, Modalidad, distancia, user, fecha FROM ActividadesStrava").fetchall() == [
+        (4, 77, "Ride", None, 33.3, "DaMario", "2026-02-02")]
+    assert "ActividadesStrava_antigua" not in {f[0] for f in conexion.execute("SELECT name FROM sqlite_master")}
+
+
+# ---- tipo_vehiculo según la modalidad ----
+
+@pytest.mark.parametrize("tipo, deporte, vehiculo", [
+    ("Ride", "MountainBikeRide", "Bici MTB"),     # MTB: siempre Bici MTB
+    ("EBikeRide", "EMountainBikeRide", "Bici MTB"),
+    ("Ride", "GravelRide", "Bici Gravel"),        # resto: el vehículo del usuario
+    ("Ride", "Ride", "Bici Gravel"),
+    ("Workout", "Workout", "Bici Gravel"),
+    ("Run", "Run", None),                         # sin vehículo
+    ("Walk", "Walk", None),
+])
+def test_tipo_vehiculo_segun_modalidad(strava_app, db, tipo, deporte, vehiculo):
+    strava_app.guardarActividadesBDD("DaMario", "Bici Gravel", [actividad_strava(1, tipo, deporte=deporte)])
+    assert db.execute("SELECT tipo_vehiculo FROM ActividadesStrava").fetchone() == (vehiculo,)
+
+
+def test_mtb_es_bici_mtb_aunque_el_usuario_no_tenga_vehiculo(strava_app, db):
+    strava_app.guardarActividadesBDD("DaMario", None, [actividad_strava(1, deporte="MountainBikeRide")])
+    assert db.execute("SELECT Modalidad, tipo_vehiculo FROM ActividadesStrava").fetchone() == ("MTB", "Bici MTB")
+
+
+def test_bici_mtb_existe_en_tipo_vehiculo(db):
+    assert db.execute("SELECT COUNT(*) FROM tipo_vehiculo WHERE vehiculo = 'Bici MTB'").fetchone() == (1,)
+
+
+# ---- Columna fecha tras Modalidad ----
+
+def test_fecha_va_justo_despues_de_modalidad(app):
+    columnas = [f[1] for f in app.sqliteConnection.execute("PRAGMA table_info(ActividadesStrava)")]
+    assert columnas[columnas.index("Modalidad") + 1] == "fecha"
+    assert columnas[:5] == ["id", "StravaID", "tipo", "Modalidad", "fecha"]
+
+
+def test_fecha_al_final_se_mueve_tras_modalidad_conservando_filas(strava_app, db):
+    conexion = strava_app.sqliteConnection
+    conexion.execute("DROP TABLE ActividadesStrava")
+    conexion.execute("""CREATE TABLE ActividadesStrava (id INTEGER PRIMARY KEY AUTOINCREMENT,
+        StravaID INTEGER NOT NULL UNIQUE, tipo TEXT, Modalidad TEXT, distancia FLOAT, altimetria FLOAT,
+        duracion FLOAT, velocidad_media FLOAT, tipo_vehiculo TEXT, elemento TEXT, user TEXT, fecha TEXT)""")
+    conexion.executemany("INSERT INTO ActividadesStrava (id, StravaID, tipo, Modalidad, distancia, user, fecha) "
+                         "VALUES (?, ?, 'Ride', ?, ?, 'DaMario', ?)",
+                         [(3, 30, "MTB", 10.5, "2025-01-01"), (9, 90, "Road", 20.0, "2026-02-02")])
+    conexion.commit()
+    asegurarTablaActividades(conexion)
+    asegurarTablaActividades(conexion)
+    columnas = [f[1] for f in conexion.execute("PRAGMA table_info(ActividadesStrava)")]
+    assert columnas[:5] == ["id", "StravaID", "tipo", "Modalidad", "fecha"]
+    assert db.execute("SELECT id, StravaID, Modalidad, fecha, distancia FROM ActividadesStrava ORDER BY id").fetchall() == [
+        (3, 30, "MTB", "2025-01-01", 10.5), (9, 90, "Road", "2026-02-02", 20.0)]
+    # el autoincremento sigue después del id mayor
+    strava_app.guardarActividadesBDD("DaMario", None, [actividad_strava(100)])
+    assert db.execute("SELECT id FROM ActividadesStrava WHERE StravaID = 100").fetchone() == (10,)
+
+
+def test_columna_propia_no_se_pierde(strava_app, db):
+    conexion = strava_app.sqliteConnection
+    conexion.execute("ALTER TABLE ActividadesStrava ADD COLUMN notas TEXT")
+    conexion.execute("INSERT INTO ActividadesStrava (StravaID, notas) VALUES (1, 'mía')")
+    conexion.commit()
+    asegurarTablaActividades(conexion)
+    assert db.execute("SELECT notas FROM ActividadesStrava").fetchone() == ("mía",)
+
+
+def test_fecha_viene_de_strava_start_date_local(strava_app, db):
+    strava_app.guardarActividadesBDD("DaMario", None, [actividad_strava(1, fecha="2024-07-21T07:45:00")])
+    assert db.execute("SELECT fecha FROM ActividadesStrava").fetchone() == ("2024-07-21",)

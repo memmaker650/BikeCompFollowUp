@@ -3,6 +3,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 import json
+import re
 import sys
 import math
 
@@ -50,18 +51,22 @@ SQL_CREAR_ACTIVIDADES = """CREATE TABLE IF NOT EXISTS ActividadesStrava (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     StravaID INTEGER NOT NULL UNIQUE,
     tipo TEXT,
+    Modalidad TEXT CHECK (Modalidad IN ('MTB', 'Gravel', 'Road')),
+    fecha TEXT,
     distancia FLOAT,
     altimetria FLOAT,
     duracion FLOAT,
     velocidad_media FLOAT,
     tipo_vehiculo TEXT,
     elemento TEXT,
-    user TEXT,
-    fecha TEXT
+    user TEXT
 )"""
 
 
 COLUMNAS_DATOS_ACTIVIDADES = "tipo, distancia, altimetria, duracion, velocidad_media, tipo_vehiculo, elemento, user"
+COLUMNAS_DATOS_ACTIVIDADES_SIN_TIPO = COLUMNAS_DATOS_ACTIVIDADES.removeprefix("tipo, ")
+# Orden de las columnas tal y como las crea SQL_CREAR_ACTIVIDADES
+COLUMNAS_ACTIVIDADES_EN_ORDEN = re.findall(r"^\s{4}(\w+) ", SQL_CREAR_ACTIVIDADES, flags=re.MULTILINE)
 
 
 def asegurarTablaActividades(conexion) -> None:
@@ -82,10 +87,25 @@ def asegurarTablaActividades(conexion) -> None:
     else:
         conexion.execute(SQL_CREAR_ACTIVIDADES)
     columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(ActividadesStrava)")}
-    if "fecha" not in columnas:
-        # Día de la actividad (start_date_local). Las ya cargadas la reciben en el próximo Strava Sync.
-        logging.info("Migrando ActividadesStrava: se añade la columna fecha")
-        conexion.execute("ALTER TABLE ActividadesStrava ADD COLUMN fecha TEXT")
+    orden = [fila[1] for fila in conexion.execute("PRAGMA table_info(ActividadesStrava)")]
+    extra = [c for c in orden if c not in COLUMNAS_ACTIVIDADES_EN_ORDEN]
+    if extra:
+        logging.warning("ActividadesStrava tiene columnas propias %s: no se reordena para no perderlas", extra)
+    elif orden != COLUMNAS_ACTIVIDADES_EN_ORDEN:
+        # ALTER TABLE solo añade al final: se rehace la tabla para dejar las columnas en su sitio
+        # (Modalidad tras tipo, fecha tras Modalidad) conservando las filas. Una columna nueva queda
+        # a NULL en las actividades ya cargadas hasta el próximo Strava Sync.
+        logging.info("Migrando ActividadesStrava: se reordenan las columnas %s -> %s", orden, COLUMNAS_ACTIVIDADES_EN_ORDEN)
+        comunes = ", ".join(c for c in COLUMNAS_ACTIVIDADES_EN_ORDEN if c in columnas)
+        try:
+            conexion.execute("ALTER TABLE ActividadesStrava RENAME TO ActividadesStrava_antigua")
+            conexion.execute(SQL_CREAR_ACTIVIDADES)
+            conexion.execute(f"INSERT INTO ActividadesStrava ({comunes}) "
+                             f"SELECT {comunes} FROM ActividadesStrava_antigua ORDER BY id")
+            conexion.execute("DROP TABLE ActividadesStrava_antigua")
+        except sqlite3.Error:
+            conexion.rollback()
+            raise
     conexion.commit()
 
 
@@ -105,6 +125,34 @@ def quitarActividadesDuplicadas(conexion) -> int:
 
 # Actividades sin bici ni otro vehículo: se guardan con tipo_vehiculo = NULL
 TIPOS_SIN_VEHICULO = {"run", "walk"}
+
+
+# Modalidad de bici según el sport_type de Strava ('type' dice 'Ride' para las tres). Cualquier otro
+# deporte (Run, Walk, Workout, VirtualRide...) se guarda con Modalidad NULL.
+MODALIDADES = {
+    "MountainBikeRide": "MTB",      # Bicicleta de montaña
+    "EMountainBikeRide": "MTB",     # Bicicleta de montaña eléctrica
+    "GravelRide": "Gravel",         # Bicicleta de gravilla
+    "Ride": "Road",                 # Bicicleta de carretera
+    "EBikeRide": "Road",            # Bicicleta eléctrica
+}
+
+
+def modalidad_actividad(actividad):
+    """'MTB', 'Gravel', 'Road' o None. Si Strava no trae sport_type se usa type ('Ride' -> 'Road')."""
+    deporte = _texto(getattr(actividad, "sport_type", None)) or _texto(getattr(actividad, "type", None))
+    return MODALIDADES.get(deporte)
+
+
+# Vehículo que se guarda según la modalidad, sea cual sea el vehículo del usuario (nombres de tipo_vehiculo)
+VEHICULO_POR_MODALIDAD = {"MTB": "Bici MTB"}
+
+
+def vehiculo_actividad(actividad, modalidad, tipo_vehiculo):
+    """tipo_vehiculo de la actividad: NULL en Run/Walk; 'Bici MTB' si la modalidad es MTB; si no, el del usuario."""
+    if (_texto(actividad.type) or "").lower() in TIPOS_SIN_VEHICULO:
+        return None
+    return VEHICULO_POR_MODALIDAD.get(modalidad, tipo_vehiculo)
 
 
 def _fecha_actividad(actividad):
@@ -591,14 +639,16 @@ class StravaData:
         actividades = [a for a in (self.actividades if actividades is None else actividades) if a.id is not None]
         filas = []
         for numero, actividad in enumerate(actividades, start=1):
+            modalidad = modalidad_actividad(actividad)
             filas.append((
                 actividad.id,                                           # -> StravaID
                 _texto(actividad.type),
+                modalidad,                                              # MTB / Gravel / Road / NULL
                 _numero(actividad.distance, 1 / 1000),                  # m -> km
                 _numero(actividad.total_elevation_gain, 1, 1),          # m
                 _numero(actividad.moving_time, 1 / 3600, 3),            # s -> h
                 _numero(actividad.average_speed, 3.6),                  # m/s -> km/h
-                None if (_texto(actividad.type) or "").lower() in TIPOS_SIN_VEHICULO else tipo_vehiculo,
+                vehiculo_actividad(actividad, modalidad, tipo_vehiculo),
                 self.nombreEquipo(getattr(actividad, "gear_id", None)),
                 usuario,
                 _fecha_actividad(actividad),                            # 'YYYY-MM-DD' (hora local)
@@ -609,13 +659,14 @@ class StravaData:
             return 0
         try:
             self.cursor.executemany(
-                f"""INSERT INTO ActividadesStrava (StravaID, {COLUMNAS_DATOS_ACTIVIDADES}, fecha)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                f"""INSERT INTO ActividadesStrava (StravaID, tipo, Modalidad, {COLUMNAS_DATOS_ACTIVIDADES_SIN_TIPO}, fecha)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(StravaID) DO UPDATE SET
                        tipo = excluded.tipo, distancia = excluded.distancia, altimetria = excluded.altimetria,
                        duracion = excluded.duracion, velocidad_media = excluded.velocidad_media,
                        tipo_vehiculo = excluded.tipo_vehiculo, elemento = excluded.elemento, user = excluded.user,
-                       fecha = COALESCE(excluded.fecha, ActividadesStrava.fecha)""",
+                       fecha = COALESCE(excluded.fecha, ActividadesStrava.fecha),
+                       Modalidad = excluded.Modalidad""",
                 filas,
             )
             self.sqliteConnection.commit()

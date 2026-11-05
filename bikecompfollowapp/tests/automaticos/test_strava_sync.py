@@ -50,10 +50,10 @@ def strava_falso(monkeypatch):
     return registro
 
 
-def test_selector_de_fecha_por_defecto_1_enero_2026(pantalla):
-    assert FECHA_INICIO_STRAVA == date(2026, 1, 1)
+def test_selector_de_fecha_por_defecto_1_enero_2024(pantalla):
+    assert FECHA_INICIO_STRAVA == date(2024, 1, 1)
     assert isinstance(pantalla.fecha_desde, toga.DateInput)
-    assert pantalla.fecha_desde.value == date(2026, 1, 1)
+    assert pantalla.fecha_desde.value == date(2024, 1, 1)
     assert pantalla.fecha_desde.max == date.today()
 
 
@@ -63,9 +63,9 @@ def test_descarga_desde_la_fecha_elegida(pantalla, strava_falso):
     assert strava_falso.after == datetime(2026, 3, 15, 0, 0)
 
 
-def test_descarga_por_defecto_desde_1_enero_2026(pantalla, strava_falso):
+def test_descarga_por_defecto_desde_1_enero_2024(pantalla, strava_falso):
     asyncio.run(pantalla.recolectarDatosStrava())
-    assert strava_falso.after == datetime(2026, 1, 1, 0, 0)
+    assert strava_falso.after == datetime(2024, 1, 1, 0, 0)
 
 
 def test_descarga_en_otro_hilo_y_guarda_en_bd(pantalla, strava_falso, db):

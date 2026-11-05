@@ -9,6 +9,7 @@ from bikecompfollowapp.app import (
     COLUMNAS_DATOS_COMPONENTE,
     DESCRIPCION_POR_DEFECTO,
     DISTANCIA_LIMITE_DEFECTO,
+    FECHA_ALTA_POR_DEFECTO,
     FECHA_INICIO_STRAVA,
     SQL_CREAR_DATOS_COMPONENTE,
     TIEMPO_LIMITE_DEFECTO,
@@ -197,7 +198,7 @@ def test_crea_por_defecto_los_componentes_no_definidos(con_catalogo):
     limites = {f[0]: f[1:] for f in con_catalogo.execute(
         "SELECT elemento, fechaInsercion, distanciaLimite, tiempoLimite, mesesLimite, activo "
         "FROM archivoscomponentes WHERE descripcion = ?", (DESCRIPCION_POR_DEFECTO,))}
-    fecha = FECHA_INICIO_STRAVA.isoformat()
+    fecha = FECHA_ALTA_POR_DEFECTO.isoformat()
     assert limites["Plato"] == (fecha, DISTANCIA_LIMITE_DEFECTO, TIEMPO_LIMITE_DEFECTO, None, 1)
     assert limites["Cubierta"] == (fecha, 4000, TIEMPO_LIMITE_DEFECTO, None, 1)
     assert limites["pastillas freno"] == (fecha, 4000, TIEMPO_LIMITE_DEFECTO, None, 1)
@@ -314,3 +315,8 @@ def test_por_defecto_existentes_reciben_los_limites_actuales(con_catalogo):
         "SELECT elemento, distanciaLimite, tiempoLimite, mesesLimite FROM archivoscomponentes")}
     assert limites["Cubierta"] == (4000, 500, None)
     assert limites["Plato"] == (9999, None, None)
+
+
+def test_por_defecto_no_dependen_de_la_fecha_de_strava_sync():
+    assert FECHA_ALTA_POR_DEFECTO.isoformat() == "2026-01-01"
+    assert FECHA_INICIO_STRAVA.isoformat() == "2024-01-01"

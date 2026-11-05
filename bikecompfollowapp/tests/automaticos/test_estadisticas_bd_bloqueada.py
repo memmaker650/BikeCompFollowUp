@@ -67,7 +67,7 @@ def test_sin_columna_meses_limite_se_pinta_igual(app):
 def test_pantalla_estadisticas_con_bd_bloqueada(ui, db, otro_programa):
     ui.construir_pantalla_tres(USUARIO)
     assert len(list(ui.tabla.data)) == 10
-    assert ui.label_pantalla_dos.text == f"Usuario: {USUARIO}", "No se muestra error de lectura"
+    assert ui.label_pantalla_dos.text == "", "No se muestra error de lectura"
 
 
 def test_tabla_componente_sin_columnas_nuevas_solo_usa_los_nombres(app):

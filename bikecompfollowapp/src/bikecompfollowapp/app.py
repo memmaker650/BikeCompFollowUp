@@ -43,6 +43,10 @@ ESPERA_CORTA_BD_MS = 500
 ROJO_ALERTA = rgb(220, 0, 0)
 TAMANO_TITULO_ALERTA = 24
 TAMANO_VENTANA_ALERTA = (420, 260)
+
+# Tabla "Tiempo y Kms por Modalidad" de Estadísticas: filas y nº de años (el actual y los anteriores)
+MODALIDADES_ESTADISTICAS = ("Road", "MTB", "Gravel")
+ANIOS_ESTADISTICAS = 3
 COLOR_MANTENIMIENTO = "#1E64C8"
 
 # Componentes de prueba para la ventana de Alerta del menú del usuario (ver componentesUrgentes)
@@ -194,6 +198,48 @@ def limitesComponente(conexion, componente, usuario=None):
     return limitesDesdeUnidad(fila[1], fila[2])
 
 
+def aniosEstadisticas(hoy=None):
+    """Los AÑOS_ESTADISTICAS últimos años, el actual incluido: en 2026 -> [2024, 2025, 2026]."""
+    anio = (hoy or date.today()).year
+    return list(range(anio - ANIOS_ESTADISTICAS + 1, anio + 1))
+
+
+def kmsHorasPorModalidad(conexion, usuario, anios):
+    """Acumulados de ActividadesStrava del usuario por modalidad (Road, MTB, Gravel) y año.
+
+    Devuelve (filas, anios_sin_datos). Cada fila es (modalidad, desde, km_año1, horas_año1, km_año2, ...):
+    'desde' es el día de su primera actividad (None si no tiene ninguna) y los acumulados son 0 si no hay
+    datos ese año. anios_sin_datos son los años sin ninguna actividad de las tres modalidades."""
+    marcas = ", ".join("?" for _ in MODALIDADES_ESTADISTICAS)
+    desde = dict(conexion.execute(
+        f"""SELECT Modalidad, MIN(fecha) FROM ActividadesStrava
+            WHERE user = ? AND Modalidad IN ({marcas}) AND fecha IS NOT NULL GROUP BY Modalidad""",
+        (usuario, *MODALIDADES_ESTADISTICAS)).fetchall())
+    acumulados = {(modalidad, int(anio)): (km, horas) for modalidad, anio, km, horas in conexion.execute(
+        f"""SELECT Modalidad, strftime('%Y', fecha), ROUND(COALESCE(SUM(distancia), 0), 1),
+                   ROUND(COALESCE(SUM(duracion), 0), 1)
+            FROM ActividadesStrava
+            WHERE user = ? AND Modalidad IN ({marcas}) AND fecha IS NOT NULL
+            GROUP BY Modalidad, strftime('%Y', fecha)""",
+        (usuario, *MODALIDADES_ESTADISTICAS))}
+    filas = []
+    for modalidad in MODALIDADES_ESTADISTICAS:
+        fila = [modalidad, desde.get(modalidad)]
+        for anio in anios:
+            fila.extend(acumulados.get((modalidad, anio), (0.0, 0.0)))
+        filas.append(tuple(fila))
+    con_datos = {anio for (_, anio) in acumulados}
+    return filas, [anio for anio in anios if anio not in con_datos]
+
+
+def texto_numero(valor):
+    """12.0 -> '12', 1959.45 -> '1959.5'; None -> ''."""
+    if valor is None:
+        return ""
+    valor = round(float(valor), 1)
+    return str(int(valor)) if valor.is_integer() else f"{valor:.1f}"
+
+
 def texto_activo(valor):
     """Valor de la columna activo (1/0, True/False...) -> 'Sí' / 'No' en el idioma activo; vacío si no hay."""
     if valor is None or valor == "":
@@ -320,7 +366,7 @@ def usuariosConNombre(conexion):
 
 def crearComponentesPorDefecto(conexion, usuario=None) -> int:
     """Para cada componente de la tabla Componente que el usuario no tenga en archivoscomponentes
-    (sin distinguir mayúsculas), crea uno con descripción POR DEFECTO, fecha de alta FECHA_INICIO_STRAVA
+    (sin distinguir mayúsculas), crea uno con descripción POR DEFECTO, fecha de alta FECHA_ALTA_POR_DEFECTO
     y los límites por defecto de ese componente (limitesPorDefecto); a los POR DEFECTO que ya existían les
     actualiza esos límites. usuario=None lo hace para todos los usuarios. Devuelve cuántos ha creado."""
     asegurarColumnasArchivosComponentes(conexion)
@@ -338,7 +384,7 @@ def crearComponentesPorDefecto(conexion, usuario=None) -> int:
             conexion.executemany(
                 """INSERT INTO archivoscomponentes (usuario, elemento, descripcion, fechaInsercion,
                        distanciaLimite, tiempoLimite, mesesLimite, activo) VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
-                [(nombre_usuario, nombre, DESCRIPCION_POR_DEFECTO, FECHA_INICIO_STRAVA.isoformat(),
+                [(nombre_usuario, nombre, DESCRIPCION_POR_DEFECTO, FECHA_ALTA_POR_DEFECTO.isoformat(),
                   *limitesComponente(conexion, nombre, nombre_usuario)) for nombre in faltan],
             )
             creados += len(faltan)
@@ -526,7 +572,8 @@ class AppPaths:
         return path
 
 # Fecha por defecto del selector «Desde» de Strava Sync
-FECHA_INICIO_STRAVA = date(2026, 1, 1)
+FECHA_INICIO_STRAVA = date(2024, 1, 1)       # fecha por defecto del selector de Strava Sync
+FECHA_ALTA_POR_DEFECTO = date(2026, 1, 1)    # fecha de alta de los componentes POR DEFECTO
 
 
 class BikeCompFollowApp(toga.App):
@@ -906,40 +953,47 @@ class BikeCompFollowApp(toga.App):
             return None
         logging.info("Alerta de componentes urgentes (%s): %s", usuario, ", ".join(componentes))
         contenido = self.construirVentanaAlerta(componentes)
-        self._abrir_ventana_alerta(contenido)
+        self._abrir_ventana_alerta(contenido, t("aviso.titulo"))
         return contenido
 
     def construirVentanaAlerta(self, componentes):
-        """Contenido de la ventana: 'Alerta' en rojo y tamaño 24, el texto, la lista y el botón Aceptar."""
-        self.label_titulo_alerta = toga.Label(
-            t("aviso.titulo"),
-            style=Pack(color=ROJO_ALERTA, font_size=TAMANO_TITULO_ALERTA, font_weight="bold", margin_bottom=10),
-        )
-        self.label_mensaje_alerta = toga.Label(self.textoAlertaComponentes(componentes), style=Pack(font_size=14))
-        self.boton_aceptar_alerta = toga.Button(
-            t("aviso.aceptar"), on_press=self.cerrar_ventana_alerta, style=Pack(width=120, margin_top=20))
-        return toga.Box(
-            children=[
-                self.label_titulo_alerta,
-                self.label_mensaje_alerta,
-                toga.Box(style=Pack(flex=1)),
-                toga.Box(children=[toga.Box(style=Pack(flex=1)), self.boton_aceptar_alerta], style=Pack(direction=ROW)),
-            ],
-            style=Pack(direction=COLUMN, margin=20),
-        )
+        """Contenido de la ventana de Alerta de componentes urgentes."""
+        caja = self.construirVentanaAviso(t("aviso.titulo"), self.textoAlertaComponentes(componentes))
+        self.label_titulo_alerta, self.label_mensaje_alerta = caja.label_titulo, caja.label_mensaje
+        self.boton_aceptar_alerta = caja.boton_aceptar
+        return caja
 
-    def _abrir_ventana_alerta(self, contenido):
-        self.ventana_alerta = toga.Window(
-            title=t("aviso.titulo"), size=TAMANO_VENTANA_ALERTA, resizable=False, minimizable=False,
-            content=contenido,
-        )
-        self.ventana_alerta.show()
+    def construirVentanaAviso(self, titulo, mensaje):
+        """Contenido de una ventana de aviso: título en rojo y tamaño 24, el mensaje y el botón Aceptar,
+        que cierra la ventana en la que se abra (ver _abrir_ventana_alerta)."""
+        caja = toga.Box(style=Pack(direction=COLUMN, margin=20))
+        caja.ventana = None
+        caja.label_titulo = toga.Label(
+            titulo, style=Pack(color=ROJO_ALERTA, font_size=TAMANO_TITULO_ALERTA, font_weight="bold", margin_bottom=10))
+        caja.label_mensaje = toga.Label(mensaje, style=Pack(font_size=14))
+        caja.boton_aceptar = toga.Button(
+            t("aviso.aceptar"), on_press=lambda widget: self.cerrarVentanaAviso(caja), style=Pack(width=120, margin_top=20))
+        for hijo in (caja.label_titulo, caja.label_mensaje, toga.Box(style=Pack(flex=1)),
+                     toga.Box(children=[toga.Box(style=Pack(flex=1)), caja.boton_aceptar], style=Pack(direction=ROW))):
+            caja.add(hijo)
+        return caja
 
-    def cerrar_ventana_alerta(self, widget=None):
-        ventana = getattr(self, "ventana_alerta", None)
+    def _abrir_ventana_alerta(self, contenido, titulo_ventana):
+        """Abre `contenido` en una ventana propia (no bloquea la principal). Devuelve la ventana."""
+        if toga.App.app is None:     # sin app de Toga (tests sin GUI): no se puede crear la ventana
+            logging.warning("Sin app de Toga: no se abre la ventana %r", titulo_ventana)
+            return None
+        ventana = toga.Window(title=titulo_ventana, size=TAMANO_VENTANA_ALERTA, resizable=False,
+                              minimizable=False, content=contenido)
+        contenido.ventana = ventana
+        ventana.show()
+        return ventana
+
+    def cerrarVentanaAviso(self, contenido):
+        ventana = getattr(contenido, "ventana", None)
         if ventana is not None:
             ventana.close()
-        self.ventana_alerta = None
+        contenido.ventana = None
 
     # -------- Pantallas de mantenimiento (cuadrículas de componentes) --------
     def construir_pantalla_mantenimiento(self, clave):
@@ -1081,9 +1135,14 @@ class BikeCompFollowApp(toga.App):
     def construir_pantalla_tres(self, valor):
         self.usuarioSeleccionado = valor
 
-        self.label_pantalla_dos = toga.Label(
-            t("menu.usuario", usuario=valor),
-            style=Pack(margin_bottom=20, text_align=CENTER)
+        # "Usuario:" en azul a la izquierda y el usuario; a la derecha, mensajes de estado (errores)
+        self.label_usuario_estadisticas = toga.Label(t("componente.usuario"), style=Pack(color=AZUL))
+        self.label_usuario_seleccionado_est = toga.Label(valor or "")
+        self.label_pantalla_dos = toga.Label("")
+        linea_usuario = toga.Box(
+            children=[self.label_usuario_estadisticas, self.label_usuario_seleccionado_est,
+                      toga.Box(style=Pack(flex=1)), self.label_pantalla_dos],
+            style=Pack(direction=ROW, margin_bottom=20),
         )
 
         try:
@@ -1106,6 +1165,20 @@ class BikeCompFollowApp(toga.App):
             style=Pack(height=_altura_tabla, flex=1),
         )
 
+        # Tabla "Tiempo y Kms por Modalidad" (Road, MTB, Gravel x los 3 últimos años)
+        self.anios_estadisticas = aniosEstadisticas()
+        try:
+            self.filas_modalidad, self.anios_sin_datos = kmsHorasPorModalidad(
+                self.sqliteConnection, valor, self.anios_estadisticas)
+        except sqlite3.Error as error:
+            logging.error("Error al leer los km y horas por modalidad: %s", error)
+            self.filas_modalidad = [(m, None) + (0.0, 0.0) * len(self.anios_estadisticas)
+                                    for m in MODALIDADES_ESTADISTICAS]
+            self.anios_sin_datos = list(self.anios_estadisticas)
+        self.Title_tablaModalidad = toga.Label(
+            t("estadisticas.modalidad_titulo"), style=Pack(text_align=LEFT, font_size=16, margin_bottom=5))
+        self.tablaModalidad = self.construirTablaModalidad(self.filas_modalidad, self.anios_estadisticas)
+
         self.Title_tablaLimites = toga.Label(
             t("estadisticas.limites"),
             style=Pack(text_align=LEFT, font_size=16)
@@ -1120,8 +1193,11 @@ class BikeCompFollowApp(toga.App):
 
         contenido_box = toga.Box(
             children=[
-                self.label_pantalla_dos,
+                linea_usuario,
                 self.tabla,
+                toga.Box(style=Pack(height=20)),
+                self.Title_tablaModalidad,
+                self.tablaModalidad,
                 toga.Box(style=Pack(height=20)),
                 self.Title_tablaLimites,
                 self.tablaLimites,
@@ -1193,6 +1269,31 @@ class BikeCompFollowApp(toga.App):
 
     def ir_a_pantalla_tres(self, widget, valor):
         self._mostrar(self.construir_pantalla_tres(valor))
+        self.mostrarAdvertenciaSinDatos(valor, self.anios_sin_datos)
+
+    def construirTablaModalidad(self, filas, anios):
+        """Tabla Tiempo y Kms por Modalidad, con el mismo estilo (toga.Table) que las otras dos de la pantalla.
+
+        toga.Table no admite cabeceras agrupadas, así que cada año tiene dos columnas: '2024 KMs' y '2024 Horas'."""
+        columnas = [AccessorColumn(t("col.modalidad"), "modalidad"), AccessorColumn(t("col.desde"), "desde")]
+        for anio in anios:
+            columnas += [AccessorColumn(f"{anio} {t('col.kms')}", f"kms_{anio}"),
+                         AccessorColumn(f"{anio} {t('col.horas')}", f"horas_{anio}")]
+        datos = [(modalidad, desde or "—", *(texto_numero(valor) for valor in acumulados))
+                 for modalidad, desde, *acumulados in filas]
+        _h_cabecera, _h_fila = 28, 22
+        return toga.Table(columns=columnas, data=datos,
+                          style=Pack(height=_h_cabecera + max(len(datos), 1) * _h_fila, flex=1))
+
+    def mostrarAdvertenciaSinDatos(self, usuario, anios_sin_datos):
+        """Ventana 'Advertencia !!!' con una línea 'No hay datos del año X' por cada año sin actividades."""
+        if not anios_sin_datos:
+            return None
+        logging.info("Sin datos de Strava (%s) en los años %s", usuario, anios_sin_datos)
+        mensaje = "\n".join(t("aviso.sin_datos_anio", anio=anio) for anio in anios_sin_datos)
+        self.contenido_advertencia = self.construirVentanaAviso(t("aviso.advertencia"), mensaje)
+        self._abrir_ventana_alerta(self.contenido_advertencia, t("aviso.advertencia"))
+        return self.contenido_advertencia
 
     # Marcar componente seleccionado.
     def obtener_componente_seleccionado(self):

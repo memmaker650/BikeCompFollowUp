@@ -6,6 +6,9 @@ import pytest
 import toga
 from toga.colors import rgb
 
+from datetime import date
+
+from bikecompfollowapp import app as modulo_app
 from bikecompfollowapp import translations
 from bikecompfollowapp.translations import t
 from bikecompfollowapp.app import (
@@ -452,7 +455,7 @@ def test_estadisticas_meses(en_menu, db):
 def dialogos(con_usuario, monkeypatch):
     """Ventanas de Alerta abiertas (su contenido); en los tests no se crea una ventana real."""
     abiertos = []
-    monkeypatch.setattr(type(con_usuario), "_abrir_ventana_alerta", lambda self, contenido: abiertos.append(contenido))
+    monkeypatch.setattr(type(con_usuario), "_abrir_ventana_alerta", lambda self, contenido, titulo: abiertos.append(contenido))
     return abiertos
 
 
@@ -477,7 +480,7 @@ def test_alerta_se_muestra_tambien_al_volver_al_menu(con_usuario, dialogos):
     pulsar(con_usuario, f"{USUARIO}-Damián Vega")
     pulsar(con_usuario, "Estadísticas")
     pulsar(con_usuario, "◀ Volver")
-    assert len(dialogos) == 2
+    assert [d.label_titulo.text for d in dialogos].count("Alerta") == 2
 
 
 def test_sin_componentes_urgentes_no_hay_alerta(con_usuario, dialogos, monkeypatch):
@@ -496,11 +499,15 @@ def test_alerta_traducida(con_usuario, dialogos):
 
 def test_aceptar_cierra_la_ventana_de_alerta(con_usuario, dialogos):
     cerradas = []
-    con_usuario.ventana_alerta = SimpleNamespace(close=lambda: cerradas.append(True))
-    con_usuario.construirVentanaAlerta(["Cadena"])
+    contenido = con_usuario.construirVentanaAlerta(["Cadena"])
+    contenido.ventana = SimpleNamespace(close=lambda: cerradas.append(True))
     con_usuario.boton_aceptar_alerta._impl.simulate_press()
-    assert cerradas == [True] and con_usuario.ventana_alerta is None
-    con_usuario.cerrar_ventana_alerta()                       # sin ventana abierta: no falla
+    assert cerradas == [True] and contenido.ventana is None
+    con_usuario.cerrarVentanaAviso(contenido)                 # ya cerrada: no falla
+
+
+def test_sin_app_de_toga_no_se_abre_ventana(con_usuario):
+    assert con_usuario._abrir_ventana_alerta(con_usuario.construirVentanaAlerta(["Cadena"]), "Alerta") is None
 
 
 def test_pintar_fondo_boton_solo_en_cocoa(en_menu):
@@ -511,3 +518,129 @@ def test_pintar_fondo_boton_solo_en_cocoa(en_menu):
     assert pintar_fondo_boton(en_menu.boton_estadisticas, "#FF8C00") is False
     assert en_menu.boton_estadisticas.style.background_color == parse_color("#FF8C00")
     assert en_menu.boton_mantenimiento.style.background_color == parse_color("#1E64C8")
+
+
+# ---- Estadísticas: "Usuario:" en azul y tabla Tiempo y Kms por Modalidad ----
+
+def test_estadisticas_usuario_en_azul_a_la_izquierda(en_menu):
+    pantalla = pulsar(en_menu, "Estadísticas")
+    etiqueta, usuario = en_menu.label_usuario_estadisticas, en_menu.label_usuario_seleccionado_est
+    linea = etiqueta.parent
+    assert linea.style.direction == "row" and linea.children[:2] == [etiqueta, usuario]
+    assert (etiqueta.text, usuario.text) == ("Usuario: ", USUARIO)
+    assert etiqueta.style.color == AZUL and usuario.style.color is None
+    contenido = pantalla.children[0]
+    assert contenido.children[0] is linea, "Primera línea de la pantalla"
+    assert f"Usuario: {USUARIO}" not in textos_labels(pantalla), "Ya no va centrado en un solo texto"
+
+
+def actividad_bd(db, strava_id, modalidad, fecha, km, horas, usuario=USUARIO, tipo="Ride"):
+    db.execute("INSERT INTO ActividadesStrava (StravaID, tipo, Modalidad, distancia, duracion, user, fecha) "
+               "VALUES (?, ?, ?, ?, ?, ?, ?)", (strava_id, tipo, modalidad, km, horas, usuario, fecha))
+    db.connection.commit()
+
+
+def cabeceras(tabla):
+    return [c.heading for c in tabla.columns]
+
+
+def filas_texto(tabla):
+    """Filas de la tabla como listas de textos, en el orden de sus columnas."""
+    return [[getattr(fila, c.accessor) for c in tabla.columns] for fila in tabla.data]
+
+
+def test_tabla_modalidad_debajo_de_componentes(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    contenido = en_menu.tabla.parent
+    hijos = contenido.children
+    i = hijos.index(en_menu.tabla)
+    assert en_menu.Title_tablaModalidad in hijos[i + 1:i + 3]
+    assert hijos.index(en_menu.tablaModalidad) == hijos.index(en_menu.Title_tablaModalidad) + 1
+    assert hijos.index(en_menu.tablaModalidad) < hijos.index(en_menu.Title_tablaLimites)
+    assert en_menu.Title_tablaModalidad.text == "Tiempo y Kms por Modalidad"
+
+
+def test_tabla_modalidad_cabeceras_y_filas(en_menu, monkeypatch):
+    monkeypatch.setattr(modulo_app, "date", type("D", (), {"today": staticmethod(lambda: __import__("datetime").date(2026, 11, 5))}))
+    pulsar(en_menu, "Estadísticas")
+    assert cabeceras(en_menu.tablaModalidad) == [
+        "Modalidad", "Desde", "2024 KMs", "2024 Horas", "2025 KMs", "2025 Horas", "2026 KMs", "2026 Horas"]
+    assert [f[0] for f in filas_texto(en_menu.tablaModalidad)] == ["Road", "MTB", "Gravel"]
+
+
+def test_tabla_modalidad_mismo_estilo_que_las_otras_tablas(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    assert all(isinstance(tabla, toga.Table) for tabla in (en_menu.tabla, en_menu.tablaModalidad, en_menu.tablaLimites))
+    assert en_menu.tablaModalidad.style.flex == en_menu.tabla.style.flex == 1
+    assert en_menu.tablaModalidad.style.height == 28 + 3 * 22
+
+
+def test_tabla_modalidad_acumulados(en_menu, db, dialogos):
+    actividad_bd(db, 1, "Road", "2024-03-01", 50.0, 2.0)
+    actividad_bd(db, 2, "Road", "2024-05-01", 30.25, 1.25)
+    actividad_bd(db, 3, "Road", "2026-01-10", 80.0, 3.0)
+    actividad_bd(db, 4, "MTB", "2025-06-01", 40.0, 2.5)
+    actividad_bd(db, 5, "Gravel", "2026-02-01", 60.0, 3.0)
+    actividad_bd(db, 6, None, "2026-02-02", 10.0, 1.0, tipo="Run")             # sin modalidad: no cuenta
+    actividad_bd(db, 7, "Road", "2025-02-02", 999.0, 9.0, usuario="Otro")      # otro usuario
+    actividad_bd(db, 8, "Road", "2023-12-31", 500.0, 20.0)                     # fuera de los 3 años
+    filas, sin_datos = modulo_app.kmsHorasPorModalidad(db.connection, USUARIO, [2024, 2025, 2026])
+    assert filas == [
+        ("Road", "2023-12-31", 80.3, 3.3, 0.0, 0.0, 80.0, 3.0),
+        ("MTB", "2025-06-01", 0.0, 0.0, 40.0, 2.5, 0.0, 0.0),
+        ("Gravel", "2026-02-01", 0.0, 0.0, 0.0, 0.0, 60.0, 3.0),
+    ]
+    assert sin_datos == []
+
+
+def test_tabla_modalidad_se_pinta_con_los_datos(en_menu, db, dialogos):
+    actividad_bd(db, 1, "MTB", f"{date.today().year}-01-02", 40.0, 2.5)
+    pulsar(en_menu, "Estadísticas")
+    mtb = [f for f in filas_texto(en_menu.tablaModalidad) if f[0] == "MTB"][0]
+    assert mtb[1] == f"{date.today().year}-01-02"
+    assert mtb[-2:] == ["40", "2.5"]
+    road = [f for f in filas_texto(en_menu.tablaModalidad) if f[0] == "Road"][0]
+    assert road[1] == "—" and set(road[2:]) == {"0"}
+
+
+def test_advertencia_por_cada_anio_sin_datos(en_menu, db, dialogos):
+    hoy = date.today().year
+    actividad_bd(db, 1, "Road", f"{hoy - 1}-05-01", 50.0, 2.0)
+    pulsar(en_menu, "Estadísticas")
+    avisos = [d for d in dialogos if d.label_titulo.text == "Advertencia !!!"]
+    assert len(avisos) == 1
+    assert avisos[0].label_mensaje.text.splitlines() == [f"No hay datos del año {hoy - 2}", f"No hay datos del año {hoy}"]
+    assert avisos[0].label_titulo.style.color == modulo_app.ROJO_ALERTA
+
+
+def test_sin_advertencia_si_hay_datos_los_tres_anios(en_menu, db, dialogos):
+    hoy = date.today().year
+    for n, anio in enumerate(range(hoy - 2, hoy + 1)):
+        actividad_bd(db, n, "Gravel", f"{anio}-05-01", 10.0, 1.0)
+    pulsar(en_menu, "Estadísticas")
+    assert not [d for d in dialogos if d.label_titulo.text == "Advertencia !!!"]
+
+
+def test_un_anio_solo_con_carreras_cuenta_como_sin_datos(en_menu, db):
+    hoy = date.today().year
+    actividad_bd(db, 1, None, f"{hoy}-05-01", 10.0, 1.0, tipo="Run")
+    _, sin_datos = modulo_app.kmsHorasPorModalidad(db.connection, USUARIO, [hoy])
+    assert sin_datos == [hoy]
+
+
+def test_advertencia_traducida(en_menu, dialogos):
+    translations.set_language("en")
+    en_menu.ir_a_pantalla_tres(None, USUARIO)
+    aviso = [d for d in dialogos if d.label_titulo.text == "Warning !!!"][0]
+    assert aviso.label_mensaje.text.splitlines()[0].startswith("No data for year ")
+    assert cabeceras(en_menu.tablaModalidad)[2:4] == [f"{date.today().year - 2} Km", f"{date.today().year - 2} Hours"]
+
+
+@pytest.mark.parametrize("valor, texto", [(None, ""), (0.0, "0"), (12.0, "12"), (1959.45, "1959.5"), (2.24, "2.2")])
+def test_texto_numero(valor, texto):
+    assert modulo_app.texto_numero(valor) == texto
+
+
+def test_anios_estadisticas():
+    from datetime import date as fecha
+    assert modulo_app.aniosEstadisticas(fecha(2026, 11, 5)) == [2024, 2025, 2026]
