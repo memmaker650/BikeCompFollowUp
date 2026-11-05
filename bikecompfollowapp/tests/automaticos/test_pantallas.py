@@ -52,6 +52,14 @@ def pulsar(ui, texto):
     return ui.main_window.content
 
 
+def ir_a_cuadricula(ui, mecanico="MECÁNICO HOY", modalidad="ROAD"):
+    """Menú -> Mantenimiento -> (mecánico + modalidad) -> Continuar: cuadrícula de componentes."""
+    pulsar(ui, "Mantenimiento / Paso por taller")
+    pulsar(ui, mecanico)
+    pulsar(ui, modalidad)
+    return pulsar(ui, "Continuar ▶")
+
+
 def textos_labels(raiz):
     return [label.text for label in widgets(raiz, toga.Label)]
 
@@ -154,7 +162,7 @@ def test_strava_sync_abre_sincronizacion_y_vuelve_a_menu(en_menu):
 # ---- Pantallas de mantenimiento ----
 
 def test_mantenimiento_muestra_cuadricula(en_menu):
-    pantalla = pulsar(en_menu, "Mantenimiento / Paso por taller")
+    pantalla = ir_a_cuadricula(en_menu)
     filas = PANTALLAS_MANTENIMIENTO[PANTALLA_MANTENIMIENTO][1]
     esperados = [t(clave) for fila in filas for clave in fila]
     assert [texto for texto in textos_botones(pantalla) if texto != "◀ Volver"] == esperados
@@ -167,7 +175,7 @@ def test_mantenimiento_muestra_cuadricula(en_menu):
     (["Otros", "TUBELESS"], "tubeless"),
 ])
 def test_navegacion_subpantallas(en_menu, ruta, clave):
-    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    ir_a_cuadricula(en_menu)
     for texto in ruta:
         pantalla = pulsar(en_menu, texto)
 
@@ -180,17 +188,18 @@ def test_navegacion_subpantallas(en_menu, ruta, clave):
 
 
 def test_volver_recorre_las_subpantallas_hasta_el_menu(en_menu):
-    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    ir_a_cuadricula(en_menu)
     pulsar(en_menu, "Otros")
     pulsar(en_menu, "RODAMIENTOS")
 
     assert "Componentes" in textos_labels(pulsar(en_menu, "◀ Volver"))
     assert "Mantenimiento / Paso por taller" in textos_labels(pulsar(en_menu, "◀ Volver"))
+    assert "MECÁNICO HOY" in textos_botones(pulsar(en_menu, "◀ Volver")), "La cuadrícula vuelve a la pantalla previa"
     assert "Estadísticas" in textos_botones(pulsar(en_menu, "◀ Volver"))
 
 
 def test_componente_abre_alta_con_elemento_preseleccionado(en_menu):
-    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    ir_a_cuadricula(en_menu)
     pantalla = pulsar(en_menu, "Cadena")
 
     assert "Añadir Componente" in textos_labels(pantalla)
@@ -201,14 +210,14 @@ def test_componente_abre_alta_con_elemento_preseleccionado(en_menu):
 
 
 def test_componente_que_no_esta_en_bd_se_anade_al_desplegable(en_menu):
-    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    ir_a_cuadricula(en_menu)
     pulsar(en_menu, "Otros")
     pulsar(en_menu, "HORQUILLA")
     assert en_menu.selection_elemento.value == "HORQUILLA"
 
 
 def test_alta_desde_mantenimiento_guarda_y_vuelve_a_la_cuadricula(en_menu, db):
-    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    ir_a_cuadricula(en_menu)
     pulsar(en_menu, "Otros")
     pulsar(en_menu, "Otros")
     pulsar(en_menu, "PEDALIER")
@@ -365,7 +374,7 @@ def test_alta_componente_etiqueta_horas_limite(en_menu):
 
 
 def test_alta_componente_usuario_en_la_linea_siguiente_en_azul(en_menu):
-    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    ir_a_cuadricula(en_menu)
     pantalla = pulsar(en_menu, "Cadena")
     labels = textos_labels(pantalla)
     titulo = labels.index("Añadir Componente")
@@ -410,7 +419,7 @@ def test_alta_rellena_limites_por_defecto(en_menu, componente, esperado):
     (["Otros", "Otros", "Purgado FRENOS"], ("", "", "12")),
 ])
 def test_alta_desde_mantenimiento_trae_sus_limites(en_menu, ruta, esperado):
-    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    ir_a_cuadricula(en_menu)
     for texto in ruta:
         pulsar(en_menu, texto)
     assert limites_en_pantalla(en_menu) == esperado
@@ -645,3 +654,130 @@ def test_texto_numero(valor, texto):
 def test_anios_estadisticas():
     from datetime import date as fecha
     assert dbops.aniosEstadisticas(fecha(2026, 11, 5)) == [2024, 2025, 2026]
+
+
+# ---- Pantalla previa a Mantenimiento: MECÁNICO HOY / EN FECHA + ROAD / MTB / GRAVEL ----
+
+@pytest.fixture
+def preparacion(en_menu):
+    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    return en_menu
+
+
+def test_mantenimiento_abre_la_pantalla_previa(preparacion):
+    pantalla = preparacion.main_window.content
+    assert {"MECÁNICO HOY", "MECÁNICO EN FECHA", "ROAD", "MTB", "GRAVEL", "Continuar ▶", "◀ Volver"} <= set(
+        textos_botones(pantalla))
+    assert "Cadena" not in textos_botones(pantalla), "Aún no es la cuadrícula de componentes"
+    assert not widgets(pantalla, toga.DateInput), "El selector de fecha solo sale con MECÁNICO EN FECHA"
+
+
+def test_mecanico_arriba_y_modalidades_abajo(preparacion):
+    contenido = preparacion.main_window.content.children[0]
+    arriba = preparacion.boton_mecanico_hoy.parent.parent.parent
+    abajo = preparacion.botones_modalidad["Road"].parent.parent
+    assert contenido.children.index(arriba) < contenido.children.index(abajo)
+    assert [b.text for b in widgets(arriba, toga.Button)] == ["MECÁNICO HOY", "MECÁNICO EN FECHA"]
+    assert [b.text for b in widgets(abajo, toga.Button)] == ["ROAD", "MTB", "GRAVEL"]
+
+
+def test_volver_abajo_a_la_izquierda_lleva_al_menu(preparacion):
+    barra = barra_inferior(preparacion.main_window.content)
+    assert barra.children[0].text == "◀ Volver"
+    assert "Estadísticas" in textos_botones(pulsar(preparacion, "◀ Volver"))
+
+
+@pytest.mark.parametrize("pulsados", [[], ["MECÁNICO HOY"], ["MTB"], ["MECÁNICO EN FECHA"], ["ROAD", "GRAVEL"]])
+def test_continuar_desactivado_sin_un_boton_arriba_y_otro_abajo(preparacion, pulsados):
+    for texto in pulsados:
+        pulsar(preparacion, texto)
+    assert preparacion.boton_continuar_mantenimiento.enabled is False
+    preparacion.continuar_a_mantenimiento()                  # aunque se llame, no avanza
+    assert "Cadena" not in textos_botones(preparacion.main_window.content)
+
+
+@pytest.mark.parametrize("mecanico, modalidad", [("MECÁNICO HOY", "ROAD"), ("MECÁNICO EN FECHA", "MTB"),
+                                                 ("MECÁNICO HOY", "GRAVEL")])
+def test_con_los_dos_elegidos_continua_a_la_cuadricula(preparacion, mecanico, modalidad):
+    pulsar(preparacion, modalidad)          # el orden da igual
+    pulsar(preparacion, mecanico)
+    assert preparacion.boton_continuar_mantenimiento.enabled is True
+    pantalla = pulsar(preparacion, "Continuar ▶")
+    filas = PANTALLAS_MANTENIMIENTO[PANTALLA_MANTENIMIENTO][1]
+    assert [x for x in textos_botones(pantalla) if x != "◀ Volver"] == [t(c) for fila in filas for c in fila]
+    assert preparacion.modalidad_mantenimiento == {"ROAD": "Road", "MTB": "MTB", "GRAVEL": "Gravel"}[modalidad]
+
+
+def test_mecanico_en_fecha_muestra_selector_de_fecha(preparacion):
+    pantalla = pulsar(preparacion, "MECÁNICO EN FECHA")
+    selectores = widgets(pantalla, toga.DateInput)
+    assert selectores == [preparacion.selector_fecha_mecanico]
+    assert selectores[0].value == date.today()
+    pantalla = pulsar(preparacion, "MECÁNICO HOY")
+    assert not widgets(pantalla, toga.DateInput), "Al volver a HOY desaparece"
+
+
+def test_boton_elegido_resaltado(preparacion):
+    pulsar(preparacion, "MECÁNICO EN FECHA")
+    pulsar(preparacion, "MTB")
+    from toga.colors import Color
+    elegido = Color.parse(modulo_app.COLOR_SELECCIONADO)
+    assert preparacion.boton_mecanico_fecha.style.background_color == elegido
+    assert preparacion.botones_modalidad["MTB"].style.background_color == elegido
+    assert preparacion.boton_mecanico_hoy.style.background_color != elegido
+    assert preparacion.botones_modalidad["Road"].style.background_color != elegido
+
+
+def test_fecha_elegida_pasa_al_alta_del_componente(preparacion):
+    pulsar(preparacion, "MECÁNICO EN FECHA")
+    preparacion.selector_fecha_mecanico.value = date(2026, 3, 14)
+    pulsar(preparacion, "GRAVEL")
+    pantalla = pulsar(preparacion, "Continuar ▶")
+    assert "GRAVEL · mecánico el 2026-03-14" in textos_labels(pantalla)
+    pulsar(preparacion, "Cadena")
+    assert preparacion.entrada_fecha.value == "2026-03-14"
+
+
+def test_mecanico_hoy_usa_la_fecha_de_hoy_en_el_alta(preparacion):
+    pulsar(preparacion, "MECÁNICO HOY")
+    pulsar(preparacion, "ROAD")
+    pulsar(preparacion, "Continuar ▶")
+    pulsar(preparacion, "Cadena")
+    assert preparacion.entrada_fecha.value == date.today().isoformat()
+
+
+def test_volver_desde_la_cuadricula_conserva_lo_elegido(preparacion):
+    pulsar(preparacion, "MECÁNICO EN FECHA")
+    preparacion.selector_fecha_mecanico.value = date(2026, 2, 1)
+    pulsar(preparacion, "MTB")
+    pulsar(preparacion, "Continuar ▶")
+    pantalla = pulsar(preparacion, "◀ Volver")
+    assert preparacion.selector_fecha_mecanico.value == date(2026, 2, 1)
+    assert preparacion.boton_continuar_mantenimiento.enabled is True
+    assert "MECÁNICO HOY" in textos_botones(pantalla)
+
+
+def test_entrar_de_nuevo_desde_el_menu_empieza_de_cero(preparacion):
+    pulsar(preparacion, "MECÁNICO HOY")
+    pulsar(preparacion, "ROAD")
+    pulsar(preparacion, "◀ Volver")
+    pulsar(preparacion, "Mantenimiento / Paso por taller")
+    assert preparacion.boton_continuar_mantenimiento.enabled is False
+
+
+def test_pantalla_previa_traducida(en_menu):
+    translations.set_language("en")
+    en_menu.ir_a_preparacion_mantenimiento()
+    assert {"MECHANIC TODAY", "MECHANIC ON DATE", "ROAD", "MTB", "GRAVEL", "Continue ▶"} <= set(
+        textos_botones(en_menu.main_window.content))
+
+
+def test_selector_de_fecha_debajo_de_mecanico_en_fecha(preparacion):
+    pulsar(preparacion, "MECÁNICO EN FECHA")
+    columna = preparacion.columna_mecanico_fecha
+    assert columna.style.direction == "column"
+    assert columna.children[0] is preparacion.boton_mecanico_fecha
+    assert preparacion.selector_fecha_mecanico in widgets(columna.children[1]), "Justo debajo del botón"
+    columna_hoy = preparacion.boton_mecanico_hoy.parent
+    assert preparacion.selector_fecha_mecanico not in widgets(columna_hoy)
+    assert columna_hoy.parent is columna.parent and columna_hoy.parent.style.direction == "row"

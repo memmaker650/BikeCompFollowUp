@@ -190,7 +190,10 @@ def test_menu_y_mantenimiento_en_ingles(inicio):
     pantalla = pulsar(inicio, "DaMario-Damián")
     assert {"Statistics", "Maintenance / Workshop visit", "Strava Sync", "◀ Back"} <= set(textos(pantalla))
 
-    pantalla = pulsar(inicio, "Maintenance / Workshop visit")
+    pulsar(inicio, "Maintenance / Workshop visit")
+    pulsar(inicio, "MECHANIC TODAY")
+    pulsar(inicio, "MTB")
+    pantalla = pulsar(inicio, "Continue ▶")
     assert {"Chain", "Brake pads", "Others"} <= set(textos(pantalla))
 
     pantalla = pulsar(inicio, "Others")
@@ -202,6 +205,9 @@ def test_componente_en_frances_se_guarda_en_castellano(inicio, db):
     pulsar(inicio, BANDERAS["en"])       # -> francés
     pulsar(inicio, "DaMario-Damián")
     pulsar(inicio, "Entretien / Passage à l'atelier")
+    pulsar(inicio, "MÉCANICIEN AUJOURD'HUI")
+    pulsar(inicio, "GRAVEL")
+    pulsar(inicio, "Continuer ▶")
     pulsar(inicio, "Autres")
     pulsar(inicio, "FOURCHE")
     assert inicio.selection_elemento.value == "HORQUILLA"

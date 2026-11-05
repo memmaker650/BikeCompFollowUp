@@ -33,6 +33,13 @@
     <text key="aviso.aceptar">Aceptar</text>
     <text key="aviso.urgentes">Componentes a cambiar de manera urgente :</text>
     <text key="menu.mantenimiento">Mantenimiento / Paso por taller</text>
+    <text key="preparacion.cuando">¿Cuándo pasa por el mecánico?</text>
+    <text key="preparacion.hoy">MECÁNICO HOY</text>
+    <text key="preparacion.en_fecha">MECÁNICO EN FECHA</text>
+    <text key="preparacion.fecha">Fecha:</text>
+    <text key="preparacion.modalidad">¿Qué bici?</text>
+    <text key="preparacion.continuar">Continuar ▶</text>
+    <text key="preparacion.resumen">{modalidad} · mecánico el {fecha}</text>
     <text key="menu.strava">Strava Sync</text>
     <!-- Campos de formulario -->
     <text key="campo.nombre">Nombre</text>
@@ -158,6 +165,13 @@
     <text key="aviso.aceptar">OK</text>
     <text key="aviso.urgentes">Components to replace urgently:</text>
     <text key="menu.mantenimiento">Maintenance / Workshop visit</text>
+    <text key="preparacion.cuando">When is the mechanic visit?</text>
+    <text key="preparacion.hoy">MECHANIC TODAY</text>
+    <text key="preparacion.en_fecha">MECHANIC ON DATE</text>
+    <text key="preparacion.fecha">Date:</text>
+    <text key="preparacion.modalidad">Which bike?</text>
+    <text key="preparacion.continuar">Continue ▶</text>
+    <text key="preparacion.resumen">{modalidad} · mechanic on {fecha}</text>
     <text key="menu.strava">Strava Sync</text>
     <text key="campo.nombre">Name</text>
     <text key="campo.usuario">User</text>
@@ -275,6 +289,13 @@
     <text key="aviso.aceptar">OK</text>
     <text key="aviso.urgentes">Composants à remplacer d'urgence :</text>
     <text key="menu.mantenimiento">Entretien / Passage à l'atelier</text>
+    <text key="preparacion.cuando">Quand a lieu le passage chez le mécanicien ?</text>
+    <text key="preparacion.hoy">MÉCANICIEN AUJOURD'HUI</text>
+    <text key="preparacion.en_fecha">MÉCANICIEN À UNE DATE</text>
+    <text key="preparacion.fecha">Date :</text>
+    <text key="preparacion.modalidad">Quel vélo ?</text>
+    <text key="preparacion.continuar">Continuer ▶</text>
+    <text key="preparacion.resumen">{modalidad} · mécanicien le {fecha}</text>
     <text key="menu.strava">Strava Sync</text>
     <text key="campo.nombre">Nom</text>
     <text key="campo.usuario">Utilisateur</text>

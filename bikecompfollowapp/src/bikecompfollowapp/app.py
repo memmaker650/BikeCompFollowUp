@@ -41,6 +41,12 @@ TAMANO_VENTANA_ALERTA = (420, 260)
 
 COLOR_MANTENIMIENTO = "#1E64C8"
 
+# Pantalla previa a Mantenimiento: cuándo es el paso por taller y con qué bici
+MECANICO_HOY, MECANICO_EN_FECHA = "hoy", "fecha"
+MODALIDADES_MANTENIMIENTO = ("Road", "MTB", "Gravel")      # valores de ActividadesStrava.Modalidad
+ALTO_BOTON_PREPARACION = 90
+COLOR_SELECCIONADO = COLOR_MANTENIMIENTO                     # fondo del botón elegido
+
 # Componentes de prueba para la ventana de Alerta del menú del usuario (ver componentesUrgentes)
 COMPONENTES_URGENTES_PRUEBA = ["Cadena", "Pastillas de Freno"]
 
@@ -383,7 +389,7 @@ class BikeCompFollowApp(toga.App):
         )
         self.boton_mantenimiento = toga.Button(
             t("menu.mantenimiento"),
-            on_press=lambda widget: self.ir_a_mantenimiento(PANTALLA_MANTENIMIENTO),
+            on_press=self.ir_a_preparacion_mantenimiento,
             style=Pack(height=ALTO_MANTENIMIENTO, background_color=COLOR_MANTENIMIENTO, **estilo_comun),
         )
         pintar_fondo_boton(self.boton_estadisticas, COLOR_ESTADISTICAS)
@@ -499,6 +505,12 @@ class BikeCompFollowApp(toga.App):
 
         contenido = toga.Box(style=Pack(direction=COLUMN, flex=1))
         contenido.add(toga.Label(t(titulo), style=Pack(margin_bottom=ESPACIO, font_size=16)))
+        if self.preparacion_completa():
+            self.label_preparacion = toga.Label(
+                t("preparacion.resumen", modalidad=self.modalidad_mantenimiento.upper(),
+                  fecha=self.fecha_mecanico.isoformat()),
+                style=Pack(margin_bottom=ESPACIO, color=AZUL))
+            contenido.add(self.label_preparacion)
         contenido.add(rejilla)
 
         main_box = toga.Box(style=Pack(direction=COLUMN, margin=10))
@@ -514,9 +526,111 @@ class BikeCompFollowApp(toga.App):
     def volver_desde_mantenimiento(self, clave):
         anterior = PANTALLAS_MANTENIMIENTO[clave][3]
         if anterior is None:
-            self.ir_a_menu_usuario()
+            self.volver_a_preparacion_mantenimiento()
         else:
             self.ir_a_mantenimiento(anterior)
+
+    # -------- Pantalla previa a Mantenimiento: MECÁNICO HOY / EN FECHA + ROAD / MTB / GRAVEL --------
+    def ir_a_preparacion_mantenimiento(self, widget=None):
+        """Desde el menú: se empieza sin nada elegido."""
+        self.mecanico = None
+        self.fecha_mecanico = date.today()
+        self.modalidad_mantenimiento = None
+        self._mostrar(self.construir_preparacion_mantenimiento())
+
+    def volver_a_preparacion_mantenimiento(self):
+        """Desde la cuadrícula de componentes: se conserva lo elegido."""
+        self._mostrar(self.construir_preparacion_mantenimiento())
+
+    def construir_preparacion_mantenimiento(self):
+        """Arriba MECÁNICO HOY / MECÁNICO EN FECHA (este muestra un selector de fecha); abajo ROAD / MTB / GRAVEL.
+        Continuar solo se activa con un botón elegido arriba y otro abajo."""
+        mecanico = getattr(self, "mecanico", None)
+        modalidad = getattr(self, "modalidad_mantenimiento", None)
+
+        def boton(texto, elegido, accion):
+            estilo = dict(flex=1, height=ALTO_BOTON_PREPARACION, font_size=16, font_weight="bold")
+            if elegido:
+                estilo.update(background_color=COLOR_SELECCIONADO, color="#FFFFFF")
+            b = toga.Button(texto, on_press=accion, style=Pack(**estilo))
+            if elegido:
+                pintar_fondo_boton(b, COLOR_SELECCIONADO)
+            return b
+
+        def fila(botones):
+            caja = toga.Box(style=Pack(direction=ROW))
+            for i, b in enumerate(botones):
+                if i:
+                    caja.add(toga.Box(style=Pack(width=ESPACIO)))
+                caja.add(b)
+            return caja
+
+        self.boton_mecanico_hoy = boton(t("preparacion.hoy"), mecanico == MECANICO_HOY,
+                                        lambda w: self.elegir_mecanico(MECANICO_HOY))
+        self.boton_mecanico_fecha = boton(t("preparacion.en_fecha"), mecanico == MECANICO_EN_FECHA,
+                                          lambda w: self.elegir_mecanico(MECANICO_EN_FECHA))
+        # Cada botón de arriba va en su columna: el selector de fecha sale justo debajo de MECÁNICO EN FECHA
+        columna_hoy = toga.Box(children=[self.boton_mecanico_hoy], style=Pack(direction=COLUMN, flex=1))
+        self.columna_mecanico_fecha = toga.Box(children=[self.boton_mecanico_fecha], style=Pack(direction=COLUMN, flex=1))
+        self.selector_fecha_mecanico = None
+        if mecanico == MECANICO_EN_FECHA:
+            self.selector_fecha_mecanico = toga.DateInput(
+                value=self.fecha_mecanico, on_change=self.cambiar_fecha_mecanico, style=Pack(margin_left=10))
+            self.columna_mecanico_fecha.add(toga.Box(
+                children=[toga.Label(t("preparacion.fecha")), self.selector_fecha_mecanico],
+                style=Pack(direction=ROW, align_items=CENTER, justify_content=CENTER, margin_top=ESPACIO)))
+        arriba = toga.Box(children=[
+            toga.Label(t("preparacion.cuando"), style=Pack(font_size=16, margin_bottom=ESPACIO)),
+            fila([columna_hoy, self.columna_mecanico_fecha]),
+        ], style=Pack(direction=COLUMN))
+
+        self.botones_modalidad = {
+            m: boton(m.upper(), modalidad == m, lambda w, m=m: self.elegir_modalidad_mantenimiento(m))
+            for m in MODALIDADES_MANTENIMIENTO
+        }
+        abajo = toga.Box(children=[
+            toga.Label(t("preparacion.modalidad"), style=Pack(font_size=16, margin_bottom=ESPACIO)),
+            fila(list(self.botones_modalidad.values())),
+        ], style=Pack(direction=COLUMN))
+
+        contenido = toga.Box(children=[
+            toga.Label(t("menu.mantenimiento"), style=Pack(font_size=16, margin_bottom=20)),
+            arriba,
+            toga.Box(style=Pack(height=40)),
+            abajo,
+        ], style=Pack(direction=COLUMN))
+
+        self.boton_continuar_mantenimiento = self._boton(t("preparacion.continuar"), self.continuar_a_mantenimiento)
+        self.boton_continuar_mantenimiento.enabled = self.preparacion_completa()
+        return self._pantalla(contenido, self._barra_inferior(
+            izquierda=self._boton_volver(self.ir_a_menu_usuario),
+            derecha=self.boton_continuar_mantenimiento,
+        ))
+
+    def preparacion_completa(self):
+        return getattr(self, "mecanico", None) is not None and getattr(self, "modalidad_mantenimiento", None) is not None
+
+    def elegir_mecanico(self, mecanico):
+        self.mecanico = mecanico
+        if mecanico == MECANICO_HOY:
+            self.fecha_mecanico = date.today()
+        self.volver_a_preparacion_mantenimiento()
+
+    def cambiar_fecha_mecanico(self, widget=None):
+        self.fecha_mecanico = self.selector_fecha_mecanico.value or date.today()
+
+    def elegir_modalidad_mantenimiento(self, modalidad):
+        self.modalidad_mantenimiento = modalidad
+        self.volver_a_preparacion_mantenimiento()
+
+    def continuar_a_mantenimiento(self, widget=None):
+        if not self.preparacion_completa():      # el botón está desactivado; por si acaso
+            return
+        if self.mecanico == MECANICO_EN_FECHA and self.selector_fecha_mecanico is not None:
+            self.fecha_mecanico = self.selector_fecha_mecanico.value or date.today()
+        logging.info("Mantenimiento (%s): mecánico %s el %s, modalidad %s", self.usuarioSeleccionado,
+                     self.mecanico, self.fecha_mecanico, self.modalidad_mantenimiento)
+        self.ir_a_mantenimiento(PANTALLA_MANTENIMIENTO)
 
     def pulsar_boton_mantenimiento(self, clave, boton):
         """Un botón abre una subpantalla si la tiene; si no, el alta del componente."""
@@ -528,6 +642,7 @@ class BikeCompFollowApp(toga.App):
                 self.usuarioSeleccionado,
                 elemento=translations.default_text(boton),
                 volver=lambda: self.ir_a_mantenimiento(clave),
+                fecha=getattr(self, "fecha_mecanico", None),
             ))
 
     # -------- Pantalla 2 (alta de usuario / vehículo) --------
@@ -751,7 +866,7 @@ class BikeCompFollowApp(toga.App):
         return self.anadirComponente(entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto, meseslim_texto)
 
     # -------- Pantalla 5 (alta de componente) --------
-    def construir_pantalla_cinco(self, valor, elemento=None, volver=None):
+    def construir_pantalla_cinco(self, valor, elemento=None, volver=None, fecha=None):
         """Alta de componente. `elemento` lo preselecciona; `volver` es la pantalla de retorno."""
         tipos_elemento = self.db.nombresComponentes(por_defecto=ELEMENTOS_POR_DEFECTO)
         if elemento:
@@ -772,7 +887,8 @@ class BikeCompFollowApp(toga.App):
             children=[self.label_usuario_componente, self.label_usuario_seleccionado],
             style=Pack(direction=ROW, margin_bottom=20),
         )
-        self.entrada_fecha = self._texto(t("campo.fecha_placeholder"), value=datetime.today().strftime("%Y-%m-%d"))
+        fecha_alta = fecha.isoformat() if fecha else datetime.today().strftime("%Y-%m-%d")
+        self.entrada_fecha = self._texto(t("campo.fecha_placeholder"), value=fecha_alta)
         self.selection_elemento = toga.Selection(items=tipos_elemento, style=Pack(width=ANCHO_CAMPO))
         if elemento:
             self.selection_elemento.value = elemento
