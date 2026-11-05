@@ -26,19 +26,19 @@ def nombres(con):
 
 
 def test_bd_bloqueada_muestra_los_nombres_de_los_componentes(app, otro_programa):
-    filas = app.componentesEstadisticas(USUARIO)
+    filas = app.db.componentesEstadisticas(USUARIO)
     assert sorted(f[0] for f in filas) == nombres(app.sqliteConnection)
     assert all(len(f) == len(COLUMNAS_COMPONENTES) for f in filas)
 
 
 def test_bd_bloqueada_no_congela_la_pantalla(app, otro_programa):
     inicio = time.monotonic()
-    app.componentesEstadisticas(USUARIO)
+    app.db.componentesEstadisticas(USUARIO)
     assert time.monotonic() - inicio < 3, "Antes tardaba 5 s por cada escritura bloqueada"
 
 
 def test_tras_estadisticas_se_recupera_la_espera_normal(app, otro_programa):
-    app.componentesEstadisticas(USUARIO)
+    app.db.componentesEstadisticas(USUARIO)
     assert app.sqliteConnection.execute("PRAGMA busy_timeout").fetchone() == (5000,)
 
 
@@ -55,7 +55,7 @@ def test_sin_columna_meses_limite_se_pinta_igual(app):
     otra.execute("BEGIN IMMEDIATE")
     otra.execute("UPDATE Componente SET nombre = nombre WHERE id = 1")
     try:
-        filas = {f[0]: f for f in app.componentesEstadisticas(USUARIO)}
+        filas = {f[0]: f for f in app.db.componentesEstadisticas(USUARIO)}
     finally:
         otra.rollback()
         otra.close()
@@ -80,7 +80,7 @@ def test_tabla_componente_sin_columnas_nuevas_solo_usa_los_nombres(app):
     otra.execute("BEGIN IMMEDIATE")
     otra.execute("UPDATE ajustes SET valor = valor")
     try:
-        assert [f[0] for f in app.componentesEstadisticas(USUARIO)] == ["cadena", "Plato"]
+        assert [f[0] for f in app.db.componentesEstadisticas(USUARIO)] == ["cadena", "Plato"]
     finally:
         otra.rollback()
         otra.close()

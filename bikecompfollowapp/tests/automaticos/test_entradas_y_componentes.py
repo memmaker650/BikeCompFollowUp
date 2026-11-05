@@ -73,7 +73,7 @@ def test_desactivar_componente(app, db, campo):
     datos["user"] = "Otro usuario"
     app.anadirComponente(**datos)
 
-    assert app.desactivarComponente("Cambio Trasero", "DaMario Bros") is True
+    assert app.db.desactivarComponente("Cambio Trasero", "DaMario Bros") is True
 
     filas = dict(db.execute("SELECT usuario, activo FROM archivoscomponentes"))
     assert filas == {"DaMario Bros": 0, "Otro usuario": 1}, "Solo se desactiva el del usuario indicado"
@@ -81,7 +81,7 @@ def test_desactivar_componente(app, db, campo):
 
 def test_desactivar_componente_inexistente_no_cambia_nada(app, db, campo):
     app.anadirComponente(**_rellenar_componente(campo))
-    app.desactivarComponente("Plato", "DaMario Bros")
+    app.db.desactivarComponente("Plato", "DaMario Bros")
     assert db.execute("SELECT activo FROM archivoscomponentes").fetchone()[0] == 1
 
 
@@ -100,4 +100,4 @@ def test_anadir_componente_con_error_devuelve_false(app, db, campo):
 
 def test_desactivar_componente_con_error_devuelve_false(app, db):
     db.execute("DROP TABLE archivoscomponentes")
-    assert app.desactivarComponente("Plato", "DaMario Bros") is False
+    assert app.db.desactivarComponente("Plato", "DaMario Bros") is False

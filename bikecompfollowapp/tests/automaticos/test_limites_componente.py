@@ -2,7 +2,7 @@
 
 import pytest
 
-from bikecompfollowapp.app import (
+from bikecompfollowapp.DB_Operations import (
     COLUMNAS_LIMITES_COMPONENTE,
     asegurarColumnasComponente,
     crearComponentesPorDefecto,

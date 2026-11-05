@@ -8,15 +8,16 @@ from toga.colors import rgb
 
 from datetime import date
 
+from bikecompfollowapp import DB_Operations as dbops
 from bikecompfollowapp import app as modulo_app
 from bikecompfollowapp import translations
 from bikecompfollowapp.translations import t
+from bikecompfollowapp.DB_Operations import orden_alfabetico
 from bikecompfollowapp.app import (
     AZUL,
     PANTALLA_MANTENIMIENTO,
     PANTALLAS_MANTENIMIENTO,
     SUBPANTALLAS_MANTENIMIENTO,
-    orden_alfabetico,
     texto_activo,
 )
 
@@ -561,7 +562,7 @@ def test_tabla_modalidad_debajo_de_componentes(en_menu):
 
 
 def test_tabla_modalidad_cabeceras_y_filas(en_menu, monkeypatch):
-    monkeypatch.setattr(modulo_app, "date", type("D", (), {"today": staticmethod(lambda: __import__("datetime").date(2026, 11, 5))}))
+    monkeypatch.setattr(dbops, "date", type("D", (), {"today": staticmethod(lambda: __import__("datetime").date(2026, 11, 5))}))
     pulsar(en_menu, "Estadísticas")
     assert cabeceras(en_menu.tablaModalidad) == [
         "Modalidad", "Desde", "2024 KMs", "2024 Horas", "2025 KMs", "2025 Horas", "2026 KMs", "2026 Horas"]
@@ -584,7 +585,7 @@ def test_tabla_modalidad_acumulados(en_menu, db, dialogos):
     actividad_bd(db, 6, None, "2026-02-02", 10.0, 1.0, tipo="Run")             # sin modalidad: no cuenta
     actividad_bd(db, 7, "Road", "2025-02-02", 999.0, 9.0, usuario="Otro")      # otro usuario
     actividad_bd(db, 8, "Road", "2023-12-31", 500.0, 20.0)                     # fuera de los 3 años
-    filas, sin_datos = modulo_app.kmsHorasPorModalidad(db.connection, USUARIO, [2024, 2025, 2026])
+    filas, sin_datos = dbops.kmsHorasPorModalidad(db.connection, USUARIO, [2024, 2025, 2026])
     assert filas == [
         ("Road", "2023-12-31", 80.3, 3.3, 0.0, 0.0, 80.0, 3.0),
         ("MTB", "2025-06-01", 0.0, 0.0, 40.0, 2.5, 0.0, 0.0),
@@ -624,7 +625,7 @@ def test_sin_advertencia_si_hay_datos_los_tres_anios(en_menu, db, dialogos):
 def test_un_anio_solo_con_carreras_cuenta_como_sin_datos(en_menu, db):
     hoy = date.today().year
     actividad_bd(db, 1, None, f"{hoy}-05-01", 10.0, 1.0, tipo="Run")
-    _, sin_datos = modulo_app.kmsHorasPorModalidad(db.connection, USUARIO, [hoy])
+    _, sin_datos = dbops.kmsHorasPorModalidad(db.connection, USUARIO, [hoy])
     assert sin_datos == [hoy]
 
 
@@ -643,4 +644,4 @@ def test_texto_numero(valor, texto):
 
 def test_anios_estadisticas():
     from datetime import date as fecha
-    assert modulo_app.aniosEstadisticas(fecha(2026, 11, 5)) == [2024, 2025, 2026]
+    assert dbops.aniosEstadisticas(fecha(2026, 11, 5)) == [2024, 2025, 2026]

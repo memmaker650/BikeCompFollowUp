@@ -2,7 +2,10 @@
 
 import sqlite3
 
-from bikecompfollowapp.app import AppPaths, BikeCompFollowApp
+from bikecompfollowapp.app import (
+    AppPaths,
+    BikeCompFollowApp,
+)
 
 TABLAS_ESPERADAS = {
     "datosComponente",
@@ -104,13 +107,13 @@ def test_tipo_vehiculo_vacio_se_rellena_con_valores_por_defecto(app_paths):
 
 
 def test_integridad_bd(app, capsys):
-    app.chequearIntegrarDB()
+    app.db.chequearIntegrarDB()
     assert "DB íntegra" in capsys.readouterr().out
 
 
 def test_crear_tabla_limites_es_idempotente(app):
-    assert app.crearTablaAlertThresholds() is True
-    assert app.crearTablaAlertThresholds() is True
+    assert app.db.crearTablaAlertThresholds() is True
+    assert app.db.crearTablaAlertThresholds() is True
 
 
 def test_columnas_limites_alerta(db):
@@ -127,7 +130,7 @@ def test_columnas_archivoscomponentes(db):
 
 
 def test_archivoscomponentes_sin_meses_se_migra_conservando_filas(app, db):
-    from bikecompfollowapp.app import asegurarColumnasArchivosComponentes
+    from bikecompfollowapp.DB_Operations import asegurarColumnasArchivosComponentes
     con = app.sqliteConnection
     con.execute("DROP TABLE archivoscomponentes")
     con.execute("CREATE TABLE archivoscomponentes (id INTEGER PRIMARY KEY, usuario NOT NULL, elemento TEXT NOT NULL, "
@@ -140,7 +143,7 @@ def test_archivoscomponentes_sin_meses_se_migra_conservando_filas(app, db):
 
 
 def test_cerrar_db(app):
-    app.cerrarDB()
+    app.db.cerrarDB()
     try:
         app.sqliteConnection.execute("SELECT 1")
         assert False, "La conexión debería estar cerrada"
@@ -190,8 +193,8 @@ def test_bd_existente_renombra_tablas_conservando_filas(app_paths, tablas):
 
 
 def test_renombrar_es_idempotente(app):
-    assert app.renombrarTablasAntiguas() is True
-    assert app.renombrarTablasAntiguas() is True
+    assert app.db.renombrarTablasAntiguas() is True
+    assert app.db.renombrarTablasAntiguas() is True
     assert app.sqliteConnection.execute("SELECT COUNT(*) FROM Componente").fetchone()[0] == 10
 
 
@@ -201,7 +204,7 @@ def test_renombrar_si_la_tabla_nueva_esta_vacia(app, tablas):
     db.execute("CREATE TABLE Elemento (id INTEGER PRIMARY KEY, nombre TEXT)")
     db.execute("INSERT INTO Elemento (nombre) VALUES ('antiguo')")
     db.commit()
-    assert app.renombrarTablasAntiguas() is True
+    assert app.db.renombrarTablasAntiguas() is True
     assert "Elemento" not in tablas(db)
     assert db.execute("SELECT nombre FROM Componente").fetchall() == [("antiguo",)]
 
@@ -211,6 +214,6 @@ def test_renombrar_no_pisa_una_tabla_nueva_con_datos(app, tablas):
     db.execute("CREATE TABLE Elemento (id INTEGER PRIMARY KEY, nombre TEXT)")
     db.execute("INSERT INTO Elemento (nombre) VALUES ('antiguo')")
     db.commit()
-    assert app.renombrarTablasAntiguas() is True
+    assert app.db.renombrarTablasAntiguas() is True
     assert "Elemento" in tablas(db), "Se deja la antigua para no perder datos"
     assert db.execute("SELECT COUNT(*) FROM Componente").fetchone()[0] == 10

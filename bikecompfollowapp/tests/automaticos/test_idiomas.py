@@ -166,9 +166,9 @@ def test_bandera_cambia_idioma_y_textos(inicio, pulsaciones, idioma, titulo, nue
 
 def test_idioma_se_guarda_en_bd(inicio):
     pulsar(inicio, BANDERAS["es"])
-    assert inicio.leerAjuste("idioma") == "en"
+    assert inicio.db.leerAjuste("idioma") == "en"
     pulsar(inicio, BANDERAS["en"])
-    assert inicio.leerAjuste("idioma") == "fr"
+    assert inicio.db.leerAjuste("idioma") == "fr"
 
 
 def test_idioma_guardado_se_recupera_al_arrancar(inicio):
@@ -179,10 +179,10 @@ def test_idioma_guardado_se_recupera_al_arrancar(inicio):
 
 
 def test_ajustes_guardar_y_leer(app):
-    assert app.leerAjuste("x", "def") == "def"
-    assert app.guardarAjuste("x", "1") is True
-    assert app.guardarAjuste("x", "2") is True
-    assert app.leerAjuste("x") == "2"
+    assert app.db.leerAjuste("x", "def") == "def"
+    assert app.db.guardarAjuste("x", "1") is True
+    assert app.db.guardarAjuste("x", "2") is True
+    assert app.db.leerAjuste("x") == "2"
 
 
 def test_menu_y_mantenimiento_en_ingles(inicio):

@@ -4,18 +4,18 @@ from datetime import date
 
 import pytest
 
-from bikecompfollowapp import app as modulo_app
-from bikecompfollowapp.app import (
+from bikecompfollowapp import DB_Operations as modulo_app   # funciones de BD y cálculos
+from bikecompfollowapp.DB_Operations import (
     COLUMNAS_DATOS_COMPONENTE,
     DESCRIPCION_POR_DEFECTO,
     DISTANCIA_LIMITE_DEFECTO,
     FECHA_ALTA_POR_DEFECTO,
-    FECHA_INICIO_STRAVA,
     SQL_CREAR_DATOS_COMPONENTE,
     TIEMPO_LIMITE_DEFECTO,
     calcularKmComponentes,
     crearComponentesPorDefecto,
 )
+from bikecompfollowapp.app import FECHA_INICIO_STRAVA
 
 USUARIO = "DaMario"
 
@@ -65,7 +65,7 @@ def test_suma_los_km_desde_la_fecha_de_alta_incluido_ese_dia(app, con):
     actividad(con, 1, 20.5, "2026-02-28")      # antes de las dos altas
     actividad(con, 2, 30.0, "2026-03-01")      # el mismo día del alta de la cadena
     actividad(con, 3, 40.25, "2026-04-01")
-    assert app.calcularKmComponentes(USUARIO) == 2
+    assert app.db.calcularKmComponentes(USUARIO) == 2
     assert km(con) == {"Cadena": (70.25, 2), "Plato": (40.25, 1)}
 
 
@@ -73,7 +73,7 @@ def test_solo_cuentan_las_actividades_ride(app, con):
     alta(con, "Cadena")
     for n, tipo in enumerate(["Ride", "VirtualRide", "Run", "Walk", "Workout", None], start=1):
         actividad(con, n, 10, "2026-03-10", tipo)
-    app.calcularKmComponentes(USUARIO)
+    app.db.calcularKmComponentes(USUARIO)
     assert km(con) == {"Cadena": (10.0, 1)}
 
 
@@ -82,7 +82,7 @@ def test_solo_cuentan_las_actividades_del_mismo_usuario(app, con):
     alta(con, "Cadena", usuario="Otro")
     actividad(con, 1, 10, "2026-03-10")
     actividad(con, 2, 99, "2026-03-10", usuario="Otro")
-    app.calcularKmComponentes()
+    app.db.calcularKmComponentes()
     filas = dict(con.execute("SELECT usuario, km FROM datosComponente").fetchall())
     assert filas == {USUARIO: 10.0, "Otro": 99.0}
 
@@ -90,22 +90,22 @@ def test_solo_cuentan_las_actividades_del_mismo_usuario(app, con):
 def test_actividades_sin_fecha_no_cuentan(app, con):
     alta(con, "Cadena")
     actividad(con, 1, 10, None)
-    app.calcularKmComponentes(USUARIO)
+    app.db.calcularKmComponentes(USUARIO)
     assert km(con) == {"Cadena": (0.0, 0)}
 
 
 def test_componente_sin_actividades_queda_a_cero(app, con):
     alta(con, "Cadena")
-    app.calcularKmComponentes(USUARIO)
+    app.db.calcularKmComponentes(USUARIO)
     assert km(con) == {"Cadena": (0.0, 0)}
 
 
 def test_recalcular_actualiza_sin_duplicar(app, con):
     id_cadena = alta(con, "Cadena")
     actividad(con, 1, 10, "2026-03-10")
-    app.calcularKmComponentes(USUARIO)
+    app.db.calcularKmComponentes(USUARIO)
     actividad(con, 2, 5, "2026-03-11")
-    app.calcularKmComponentes(USUARIO)
+    app.db.calcularKmComponentes(USUARIO)
     assert con.execute("SELECT idComponente, km, num_actividades, fecha FROM datosComponente").fetchall() == [
         (id_cadena, 15.0, 2, date.today().isoformat())
     ]
@@ -114,15 +114,15 @@ def test_recalcular_actualiza_sin_duplicar(app, con):
 def test_calcular_un_usuario_no_toca_los_demas(app, con):
     alta(con, "Cadena")
     alta(con, "Plato", usuario="Otro")
-    app.calcularKmComponentes(USUARIO)
+    app.db.calcularKmComponentes(USUARIO)
     assert con.execute("SELECT usuario FROM datosComponente").fetchall() == [(USUARIO,)]
 
 
 def test_componente_borrado_desaparece_de_datos_componente(app, con):
     id_cadena = alta(con, "Cadena")
-    app.calcularKmComponentes(USUARIO)
+    app.db.calcularKmComponentes(USUARIO)
     con.execute("DELETE FROM archivoscomponentes WHERE id = ?", (id_cadena,))
-    app.calcularKmComponentes(USUARIO)
+    app.db.calcularKmComponentes(USUARIO)
     assert con.execute("SELECT COUNT(*) FROM datosComponente").fetchone() == (0,)
 
 
@@ -131,7 +131,7 @@ def test_cada_alta_del_mismo_componente_tiene_sus_km(app, con):
     alta(con, "Cadena", "2026-03-01")
     actividad(con, 1, 10, "2026-02-01")
     actividad(con, 2, 20, "2026-03-05")
-    app.calcularKmComponentes(USUARIO)
+    app.db.calcularKmComponentes(USUARIO)
     assert con.execute("SELECT km, activo FROM datosComponente ORDER BY idComponente").fetchall() == [
         (30.0, 0), (20.0, 1)
     ]
@@ -155,8 +155,8 @@ def test_estructura_antigua_con_datos_se_conserva_aparte(con, tablas):
 
 def test_crear_es_idempotente(app, con):
     alta(con, "Cadena")
-    app.calcularKmComponentes(USUARIO)
-    assert app.crearTablaDatosComponente() is True
+    app.db.calcularKmComponentes(USUARIO)
+    assert app.db.crearTablaDatosComponente() is True
     assert con.execute("SELECT COUNT(*) FROM datosComponente").fetchone() == (1,)
     assert "UNIQUE" in SQL_CREAR_DATOS_COMPONENTE
 
@@ -167,7 +167,7 @@ def test_error_devuelve_menos_uno(app, monkeypatch):
     def falla(*args, **kwargs):
         raise sqlite3.OperationalError("roto")
     monkeypatch.setattr(modulo_app, "calcularKmComponentes", falla)
-    assert app.calcularKmComponentes(USUARIO) == -1
+    assert app.db.calcularKmComponentes(USUARIO) == -1
 
 
 # ---- Integración: Estadísticas y Strava Sync ----
@@ -176,7 +176,7 @@ def test_estadisticas_muestra_km_desde_alta(app, con_catalogo):
     alta(con_catalogo, "Plato")
     actividad(con_catalogo, 1, 12.5, "2026-03-02")
     actividad(con_catalogo, 2, 7.5, "2026-01-15")    # antes del alta del Plato, después de la de POR DEFECTO
-    filas = {f[0]: f for f in app.componentesEstadisticas(USUARIO)}
+    filas = {f[0]: f for f in app.db.componentesEstadisticas(USUARIO)}
     assert filas["Plato"][4] == 12.5                # columna 'Km desde alta'
     assert filas["Cubierta"][1] == DESCRIPCION_POR_DEFECTO
     assert filas["Cubierta"][4] == 20.0
@@ -276,13 +276,13 @@ def test_suma_las_horas_de_uso_desde_el_alta(app, con):
     actividad(con, 3, 40, "2026-03-09", horas=2.5)
     actividad(con, 4, 10, "2026-03-10", tipo="Run", horas=1.0)
     actividad(con, 5, 10, "2026-03-11")                      # sin duración
-    app.calcularKmComponentes(USUARIO)
+    app.db.calcularKmComponentes(USUARIO)
     assert con.execute("SELECT km, horas, num_actividades FROM datosComponente").fetchall() == [(80.0, 3.75, 3)]
 
 
 def test_componente_sin_actividades_tiene_cero_horas(app, con):
     alta(con, "Cadena")
-    app.calcularKmComponentes(USUARIO)
+    app.db.calcularKmComponentes(USUARIO)
     assert con.execute("SELECT horas FROM datosComponente").fetchall() == [(0.0,)]
 
 
@@ -300,7 +300,7 @@ def test_datos_componente_sin_horas_se_migra_conservando_filas(app, con):
 def test_estadisticas_muestra_horas_desde_alta(app, con_catalogo):
     alta(con_catalogo, "Plato")
     actividad(con_catalogo, 1, 12.5, "2026-03-02", horas=0.75)
-    filas = {f[0]: f for f in app.componentesEstadisticas(USUARIO)}
+    filas = {f[0]: f for f in app.db.componentesEstadisticas(USUARIO)}
     assert filas["Plato"][5:7] == (None, 0.75)                 # Horas máx (vacío en esta alta), Horas desde alta
 
 

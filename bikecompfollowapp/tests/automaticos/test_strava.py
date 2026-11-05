@@ -386,8 +386,8 @@ def test_extraer_datos_guarda_todas_las_actividades_y_totaliza_solo_ride(strava_
 @pytest.mark.parametrize("tipov, esperado", [("Bici Gravel", "Bici Gravel"), (4, "Bici MTB")])
 def test_vehiculo_del_usuario(app, db, tipov, esperado):
     db.execute("INSERT INTO EntradasUsers (nombre, usuario, tipov, descripcion) VALUES ('N', 'DaMario', ?, '')", (tipov,))
-    assert app.vehiculoDelUsuario("DaMario") == esperado
-    assert app.vehiculoDelUsuario("nadie") is None
+    assert app.db.vehiculoDelUsuario("DaMario") == esperado
+    assert app.db.vehiculoDelUsuario("nadie") is None
 
 
 def test_strava_sync_guarda_actividades_del_usuario(app, db, monkeypatch):
@@ -400,7 +400,7 @@ def test_strava_sync_guarda_actividades_del_usuario(app, db, monkeypatch):
                                       get_gear=lambda gid: SimpleNamespace(name="Specialized"))
 
     monkeypatch.setattr(StravaData, "crearObjetoCliente", cliente)
-    app._sincronizar_strava(date(2026, 1, 1), "DaMario", app.vehiculoDelUsuario("DaMario"))
+    app._sincronizar_strava(date(2026, 1, 1), "DaMario", app.db.vehiculoDelUsuario("DaMario"))
     assert db.execute("SELECT StravaID, tipo_vehiculo, elemento, user FROM ActividadesStrava").fetchall() == [
         (7, "Bici Carretera", "Specialized", "DaMario")
     ]
@@ -458,8 +458,8 @@ def test_limpieza_de_duplicados_existentes(app, db):
                        (4, "2026-11-04 12:47:16.578879", 1959, 62),
                        (5, "2026-11-04 13:59:58.149971", 1959, 62),
                    ])
-    assert app.limpiarDuplicadosStrava() is True
-    assert app.limpiarDuplicadosStrava() is True       # idempotente
+    assert app.db.limpiarDuplicadosStrava() is True
+    assert app.db.limpiarDuplicadosStrava() is True       # idempotente
     assert db.execute("SELECT id, fecha, valor FROM stravaValores ORDER BY id").fetchall() == [
         (1, "2026-04-08", 630), (2, "2026-06-12", 1122), (5, "2026-11-04", 1959)
     ]
