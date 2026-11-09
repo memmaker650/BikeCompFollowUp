@@ -3,6 +3,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 import json
+from collections import Counter
 import re
 import sys
 import math
@@ -155,6 +156,14 @@ def vehiculo_actividad(actividad, modalidad, tipo_vehiculo):
     return VEHICULO_POR_MODALIDAD.get(modalidad, tipo_vehiculo)
 
 
+# Permisos que se piden a Strava al autorizar. profile:read_all hace que /athlete incluya las bicis;
+# activity:read_all incluye también las actividades privadas.
+SCOPE_STRAVA = "read,activity:read_all,profile:read_all"
+
+# frame_type de las bicis de Strava -> Modalidad
+MODALIDAD_POR_FRAME_TYPE = {1: "MTB", 2: "Gravel", 3: "Road", 4: "Road", 5: "Gravel"}   # 2 = ciclocross, 4 = contrarreloj
+
+
 def _fecha_actividad(actividad):
     """Día de la actividad en hora local ('YYYY-MM-DD'), o None si Strava no la trae."""
     fecha = getattr(actividad, "start_date_local", None) or getattr(actividad, "start_date", None)
@@ -225,6 +234,8 @@ class StravaData:
         self.contador2 = 0
         self.actividades = []
         self._equipos = {}   # gear_id -> nombre, para no consultar Strava en cada actividad
+        self._detalles_equipo = {}   # gear_id -> DetailedGear (o None si falló)
+        self.bicis_del_perfil = False   # True si las bicis vienen del perfil del atleta (lista completa)
 
         # Misma BD que la app (BikeCFU/dbbcfu.db). Antes se abría paths.data/dbbcfu.db, otro
         # fichero distinto: SQLite lo creaba vacío y fallaba con "no such table: stravaValores".
@@ -298,7 +309,7 @@ class StravaData:
             f"?client_id={client_id}"
             f"&response_type=code"
             f"&redirect_uri=http://127.0.0.1:5000"
-            f"&scope=activity:read"
+            f"&scope={SCOPE_STRAVA}"
         )
 
         # abrir navegador
@@ -624,12 +635,70 @@ class StravaData:
             return None
         cache = self._equipos
         if gear_id not in cache:
+            detalle = self.detalleEquipo(gear_id)
+            cache[gear_id] = getattr(detalle, "name", None) or gear_id
+        return cache[gear_id]
+
+    def detalleEquipo(self, gear_id):
+        """DetailedGear de Strava (una consulta por gear_id); None si falla."""
+        if gear_id not in self._detalles_equipo:
             try:
-                cache[gear_id] = self.client.get_gear(gear_id).name or gear_id
+                self._detalles_equipo[gear_id] = self.client.get_gear(gear_id)
             except Exception as error:   # red, permisos o equipo borrado: no debe parar la carga
                 logging.warning("No se pudo obtener el equipo %s de Strava: %s", gear_id, error)
-                cache[gear_id] = gear_id
-        return cache[gear_id]
+                self._detalles_equipo[gear_id] = None
+        return self._detalles_equipo[gear_id]
+
+    def bicicletas(self):
+        """Bicis del atleta: lista de dicts con id, nombre, marca, modelo, modalidad y principal.
+
+        Salen del perfil del atleta (get_athlete().bikes, necesita el permiso profile:read_all) y, además, del
+        equipo de las actividades descargadas (gear_id que empieza por 'b'; los 'g' son zapatillas). Así se
+        obtienen aunque el token solo tenga activity:read. bicis_del_perfil indica si el perfil trajo la lista
+        (entonces es completa y se pueden marcar como retiradas las demás). None si no hay forma de saberlas."""
+        try:
+            del_perfil = list(self.client.get_athlete().bikes or [])
+        except Exception as error:   # red o token
+            logging.warning("No se pudieron leer las bicis del perfil de Strava: %s", error)
+            del_perfil = None
+        self.bicis_del_perfil = bool(del_perfil)
+        if del_perfil == []:
+            logging.info("El perfil de Strava no trae bicis (¿falta el permiso profile:read_all?): "
+                         "se toman del equipo de las actividades")
+
+        # Modalidades de las actividades de cada bici (para las que Strava no da frame_type)
+        uso = {}
+        for actividad in self.actividades:
+            gear_id = getattr(actividad, "gear_id", None)
+            if gear_id and str(gear_id).startswith("b"):
+                uso.setdefault(gear_id, Counter())[modalidad_actividad(actividad)] += 1
+
+        perfil = {bici.id: bici for bici in del_perfil or []}
+        ids = list(perfil) + [gear_id for gear_id in uso if gear_id not in perfil]
+        if del_perfil is None and not ids:
+            return None
+
+        resultado = []
+        for gear_id in ids:
+            detalle = self.detalleEquipo(gear_id)
+            en_perfil = perfil.get(gear_id)
+            nombre = getattr(en_perfil, "name", None) or getattr(detalle, "name", None)
+            if nombre:
+                self._equipos[gear_id] = nombre       # así nombreEquipo no vuelve a pedirla
+            modalidad = MODALIDAD_POR_FRAME_TYPE.get(getattr(detalle, "frame_type", None))
+            if modalidad is None:
+                usadas = [(n, m) for m, n in uso.get(gear_id, Counter()).items() if m]
+                modalidad = max(usadas)[1] if usadas else None
+            resultado.append({
+                "id": gear_id,
+                "nombre": nombre,
+                "marca": getattr(detalle, "brand_name", None),
+                "modelo": getattr(detalle, "model_name", None),
+                "modalidad": modalidad,
+                "principal": bool(getattr(en_perfil, "primary", False) or getattr(detalle, "primary", False)),
+            })
+        logging.info("Bicis de Strava: %s", [(b["nombre"], b["modalidad"]) for b in resultado])
+        return resultado
 
     def guardarActividadesBDD(self, usuario, tipo_vehiculo=None, actividades=None, progreso=None) -> int:
         """Guarda (o actualiza si ya existían) las actividades en ActividadesStrava. Devuelve cuántas.

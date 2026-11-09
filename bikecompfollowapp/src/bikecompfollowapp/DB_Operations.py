@@ -12,6 +12,7 @@ La descarga de Strava (API, tokens) sigue en stravaConnect.py.
 """
 
 import logging
+import re
 import sqlite3
 import unicodedata
 from contextlib import contextmanager
@@ -400,6 +401,74 @@ LEFT JOIN datosComponente dc ON dc.idComponente = u.id
 """
 
 
+
+# ---- Bicis del usuario descargadas de Strava ----
+SQL_CREAR_BICICLETAS = """CREATE TABLE IF NOT EXISTS Bicicletas (
+    id TEXT PRIMARY KEY,
+    usuario TEXT,
+    nombre TEXT,
+    marca TEXT,
+    modelo TEXT,
+    modalidad TEXT CHECK (modalidad IN ('MTB', 'Gravel', 'Road')),
+    anio INTEGER,
+    activa BOOLEAN NOT NULL DEFAULT 1
+)"""
+
+
+def asegurarTablaBicicletas(conexion) -> None:
+    conexion.execute(SQL_CREAR_BICICLETAS)
+    columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(Bicicletas)")}
+    if "modalidad" not in columnas:
+        logging.info("Migrando Bicicletas: se añade la columna modalidad")
+        conexion.execute("ALTER TABLE Bicicletas ADD COLUMN modalidad TEXT "
+                         "CHECK (modalidad IN ('MTB', 'Gravel', 'Road'))")
+    conexion.commit()
+
+
+def anioDeBici(*textos):
+    """Strava no guarda el año de la bici: se toma el primer año (1950-2099) que aparezca en el modelo o
+    en el nombre, p. ej. 'Canyon Nerve 7.9 2016' -> 2016. None si no hay ninguno."""
+    for texto in textos:
+        encontrado = re.search(r"\b(19[5-9]\d|20\d\d)\b", texto or "")
+        if encontrado:
+            return int(encontrado.group(1))
+    return None
+
+
+def guardarBicicletas(conexion, usuario, bicis, marcar_retiradas=True) -> int:
+    """Guarda (o actualiza) las bicis de Strava del usuario como activas. Con marcar_retiradas, las suyas que
+    ya no vienen de Strava (retiradas o borradas allí) quedan como no activas; solo tiene sentido si la lista
+    es completa (viene del perfil del atleta). Un año o una modalidad puestos a mano en la BD no se pierden
+    si Strava no los da. Devuelve cuántas bicis se han guardado."""
+    asegurarTablaBicicletas(conexion)
+    filas = []
+    for bici in bicis:
+        marca, modelo = bici.get("marca") or None, bici.get("modelo") or None
+        if not marca and not modelo:
+            modelo = bici.get("nombre")           # sin marca ni modelo en Strava: se muestra su nombre
+        filas.append((bici["id"], usuario, bici.get("nombre"), marca, modelo, bici.get("modalidad"),
+                      anioDeBici(bici.get("modelo"), bici.get("nombre"))))
+    try:
+        conexion.executemany(
+            """INSERT INTO Bicicletas (id, usuario, nombre, marca, modelo, modalidad, anio, activa)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+               ON CONFLICT(id) DO UPDATE SET usuario = excluded.usuario, nombre = excluded.nombre,
+                   marca = excluded.marca, modelo = excluded.modelo,
+                   modalidad = COALESCE(excluded.modalidad, Bicicletas.modalidad),
+                   anio = COALESCE(Bicicletas.anio, excluded.anio), activa = 1""", filas)
+        if marcar_retiradas:
+            ids = [fila[0] for fila in filas]
+            marcas = ", ".join("?" for _ in ids)
+            conexion.execute("UPDATE Bicicletas SET activa = 0 WHERE usuario = ?"
+                             + (f" AND id NOT IN ({marcas})" if ids else ""), (usuario, *ids))
+        conexion.commit()
+    except sqlite3.Error:
+        conexion.rollback()
+        raise
+    logging.info("Guardadas %d bicis de Strava de %s", len(filas), usuario)
+    return len(filas)
+
+
 # ---- Acceso a la base de datos desde la aplicación ----
 class BaseDatos:
     """Lecturas y escrituras de la aplicación sobre una conexión SQLite.
@@ -473,6 +542,7 @@ class BaseDatos:
         self.crearTablaAjustes()
         self.crearTablaActividadesStrava()
         self.crearTablaDatosComponente()
+        self.crearTablaBicicletas()
         self.limpiarDuplicadosStrava()
 
     def crearDBBasica(self):
@@ -568,6 +638,14 @@ class BaseDatos:
             asegurarTablaDatosComponente(self.conexion)
         except sqlite3.Error as error:
             logging.error("Error al crear la tabla datosComponente: %s", error)
+            return False
+        return True
+
+    def crearTablaBicicletas(self) -> bool:
+        try:
+            asegurarTablaBicicletas(self.conexion)
+        except sqlite3.Error as error:
+            logging.error("Error al crear la tabla Bicicletas: %s", error)
             return False
         return True
 
@@ -768,6 +846,16 @@ class BaseDatos:
             filas = [(nombre, *vacias) for (nombre,) in conexion.execute(
                 "SELECT DISTINCT nombre FROM Componente WHERE trim(COALESCE(nombre, '')) <> ''")]
         return sorted(filas, key=lambda fila: orden_alfabetico(fila[0]))
+
+    def bicicletasDeUsuario(self, usuario):
+        """[(id, marca, modelo, modalidad, anio, activa)] de las bicis del usuario: primero las activas."""
+        try:
+            return self.conexion.execute(
+                """SELECT id, marca, modelo, modalidad, anio, activa FROM Bicicletas WHERE usuario = ?
+                   ORDER BY activa DESC, marca COLLATE NOCASE, modelo COLLATE NOCASE""", (usuario,)).fetchall()
+        except sqlite3.Error as error:
+            logging.error("Error al leer las bicis de %s: %s", usuario, error)
+            return []
 
     def kmsHorasPorModalidad(self, usuario, anios):
         """(filas, anios_sin_datos) de la tabla Tiempo y Kms por Modalidad (ver kmsHorasPorModalidad)."""

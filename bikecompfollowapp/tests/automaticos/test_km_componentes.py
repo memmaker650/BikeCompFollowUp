@@ -260,11 +260,12 @@ def test_strava_sync_calcula_los_km_tras_la_carga(app, monkeypatch):
         guardarDatosBDD = lambda self, fecha: True
         guardarActividadesBDD = lambda self, *a, **k: orden.append("carga") or 1
         quitarActividadesDuplicadas = lambda self: orden.append("duplicados") or 0
+        bicicletas = lambda self: orden.append("bicis") or None
 
     monkeypatch.setattr(modulo_app.stravaConnect, "StravaData", FakeStrava)
     monkeypatch.setattr(modulo_app, "calcularKmComponentes", lambda con, usuario: orden.append(("km", usuario)))
     app._sincronizar_strava(date(2026, 1, 1), USUARIO, "Bici Gravel")
-    assert orden == ["descarga", "carga", "duplicados", ("km", USUARIO)]
+    assert orden == ["descarga", "carga", "duplicados", ("km", USUARIO), "bicis"]
 
 
 # ---- Horas de uso ----

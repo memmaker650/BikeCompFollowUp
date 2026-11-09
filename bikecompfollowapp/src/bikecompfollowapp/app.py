@@ -18,11 +18,12 @@ import asyncio
 if __name__ == "__main__" or __package__ is None:
     import DB_Operations as dbops
     import notificaciones
+    import registro
     import stravaConnect
     import translations
 else:
     from . import DB_Operations as dbops
-    from . import notificaciones, stravaConnect, translations
+    from . import notificaciones, registro, stravaConnect, translations
 t = translations.t
 
 # ---- Medidas de interfaz (Toga trabaja en píxeles; 1 cm ≈ 38 px a 96 ppp) ----
@@ -61,6 +62,8 @@ COLUMNAS_COMPONENTES = [
     ("col.horas_max", "tiempoLimite"), ("col.horas_desde_alta", "horasDesdeInsercion"),
     ("col.meses_max", "mesesLimite"), ("col.meses_desde_alta", "mesesDesdeInsercion"), ("col.activo", "activo"),
 ]
+COLUMNAS_BICICLETAS = [("col.id", "id"), ("col.marca", "marca"), ("col.modelo", "modelo"),
+                       ("col.modalidad", "modalidad"), ("col.anio", "anio"), ("col.activa", "activa")]
 COLUMNAS_LIMITES = [("col.componente", "componente"), ("col.tipo_limite", "tipo_limite"), ("col.valor", "valor")]
 
 # Tipos de límite tal y como se guardan en LimitesAlerta -> clave del texto que se muestra
@@ -220,7 +223,12 @@ class BikeCompFollowApp(toga.App):
     sqliteConnection = 0
     index_entrada = 0
     db_path = None
-    log_path = None
+    log_handler = None
+
+    @property
+    def log_path(self):
+        """Fichero de log en uso (cambia cada día)."""
+        return Path(self.log_handler.baseFilename) if self.log_handler else None
     usuarioSeleccionado = None
     sync_strava_en_curso = False
 
@@ -239,15 +247,14 @@ class BikeCompFollowApp(toga.App):
 
         self.main_window = toga.MainWindow(title=self.formal_name)
         
-        # Obtener la ruta del directorio actual del script
-        self.log_path = AppPaths.get("data", "BikeCFU", "bikecfu.log")
+        # Log: un fichero por día (BikeCFU/bikecfu_YYYYMMDD.log), ver registro.py
+        self.log_handler = registro.configurar_log(AppPaths.get("data", "BikeCFU"))
         print("DATA DIR:", self.paths.data)
         print("Log DIR:", self.log_path)
-        
-        logging.basicConfig(filename=str(self.log_path), level=logging.DEBUG,
-        format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',datefmt='%Y-%m-%d %H:%M:%S')
+
         logging.info("Inicio BikeCompFollowApp iOS App!!!")
         print("Inicio BikeCompFollowApp iOS App!!!")
+        registro.limpiar_logs_antiguos(AppPaths.get("data", "BikeCFU"))
 
         self.arrancarDB()
         self.db.prepararTablas()
@@ -754,6 +761,16 @@ class BikeCompFollowApp(toga.App):
             t("estadisticas.modalidad_titulo"), style=Pack(text_align=LEFT, font_size=16, margin_bottom=5))
         self.tablaModalidad = self.construirTablaModalidad(self.filas_modalidad, self.anios_estadisticas)
 
+        # Bicis del usuario (tabla Bicicletas, se descargan de Strava en Strava Sync)
+        datos_bicis = [(id_, marca or "", modelo or "", modalidad or "", "" if anio is None else str(anio),
+                        texto_activo(activa))
+                       for id_, marca, modelo, modalidad, anio, activa in self.db.bicicletasDeUsuario(valor)]
+        self.Title_tablaBicis = toga.Label(
+            t("estadisticas.bicis_titulo"), style=Pack(text_align=LEFT, font_size=16, margin_bottom=5))
+        self.tablaBicis = toga.Table(
+            columns=_columnas(COLUMNAS_BICICLETAS), data=datos_bicis,
+            style=Pack(height=28 + max(len(datos_bicis), 1) * 22, flex=1))
+
         self.Title_tablaLimites = toga.Label(
             t("estadisticas.limites"),
             style=Pack(text_align=LEFT, font_size=16)
@@ -773,6 +790,9 @@ class BikeCompFollowApp(toga.App):
                 toga.Box(style=Pack(height=20)),
                 self.Title_tablaModalidad,
                 self.tablaModalidad,
+                toga.Box(style=Pack(height=20)),
+                self.Title_tablaBicis,
+                self.tablaBicis,
                 toga.Box(style=Pack(height=20)),
                 self.Title_tablaLimites,
                 self.tablaLimites,
@@ -1004,6 +1024,13 @@ class BikeCompFollowApp(toga.App):
                 dbops.calcularKmComponentes(datos.sqliteConnection, usuario)
             except sqlite3.Error as error:   # los km se recalculan también al abrir Estadísticas
                 logging.error("Error al calcular los km de los componentes tras Strava Sync: %s", error)
+            bicis = datos.bicicletas()       # None si Strava no las da: no se toca lo guardado
+            if bicis is not None:
+                try:
+                    dbops.guardarBicicletas(datos.sqliteConnection, usuario, bicis,
+                                            marcar_retiradas=getattr(datos, "bicis_del_perfil", True))
+                except sqlite3.Error as error:
+                    logging.error("Error al guardar las bicis de Strava: %s", error)
             return guardadas
         finally:
             datos.cerrar()
