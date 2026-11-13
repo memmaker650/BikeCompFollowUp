@@ -3,6 +3,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 import json
+import shutil
 from collections import Counter
 import re
 import sys
@@ -19,6 +20,11 @@ import requests
 import time
 
 from stravalib.client import Client
+
+if __package__:
+    from . import rutas
+else:
+    import rutas
 
 class OAuthHandler(BaseHTTPRequestHandler):
 
@@ -156,6 +162,12 @@ def vehiculo_actividad(actividad, modalidad, tipo_vehiculo):
     return VEHICULO_POR_MODALIDAD.get(modalidad, tipo_vehiculo)
 
 
+# Ficheros de la conexión con Strava: dentro de la carpeta de la app (…/com.SkullWithGasMask/BikeCFU, ver
+# rutas.py), junto a la BD y el log
+CARPETA_APP = rutas.CARPETA_APP
+FICHERO_TOKENS = "strava_tokens.json"
+FICHERO_SECRETOS = "client_secrets.txt"
+
 # Permisos que se piden a Strava al autorizar. profile:read_all hace que /athlete incluya las bicis;
 # activity:read_all incluye también las actividades privadas.
 SCOPE_STRAVA = "read,activity:read_all,profile:read_all"
@@ -246,7 +258,7 @@ class StravaData:
         if not self._conexion_propia:
             self.sqliteConnection = conexion
         else:
-            file_pathDB = getattr(app, "db_path", None) or Path(app.paths.data) / "BikeCFU" / "dbbcfu.db"
+            file_pathDB = getattr(app, "db_path", None) or rutas.carpeta_app(app.paths.data) / "dbbcfu.db"
             Path(file_pathDB).parent.mkdir(parents=True, exist_ok=True)
             self.sqliteConnection = sqlite3.connect(file_pathDB, timeout=15)
             logging.info("Successfully Connected to SQLite: %s", file_pathDB)
@@ -260,8 +272,23 @@ class StravaData:
     # Open the secrets file and store the client ID and client secret as objects, separated by a comma
     # Read below to learn how to set up the app that provides you with the client ID
     # and the client secret
-    def initConexion(self):   
-        file_path = self.app.paths.data / "client_secrets.txt" 
+    def ruta_fichero(self, nombre):
+        """<paths.data>/BikeCFU/<nombre>. Si el fichero aún está en la ubicación antigua (paths.data/<nombre>)
+        y no en BikeCFU, se copia a BikeCFU; el antiguo no se borra."""
+        base = rutas.raiz_datos(self.app.paths.data)     # sin la subcarpeta "Data" de Toga 0.5.7
+        carpeta = base / CARPETA_APP
+        carpeta.mkdir(parents=True, exist_ok=True)
+        ruta, antigua = carpeta / nombre, base / nombre
+        if not ruta.exists() and antigua.is_file():
+            try:
+                shutil.copy2(antigua, ruta)
+                logging.info("%s copiado de %s a %s", nombre, base, carpeta)
+            except OSError as error:
+                logging.warning("No se pudo copiar %s a %s: %s", nombre, carpeta, error)
+        return ruta
+
+    def initConexion(self):
+        file_path = self.ruta_fichero(FICHERO_SECRETOS)
         print("Ruta dentro StravaData: ", file_path)
         if file_path.exists():
             with open(file_path, "r", encoding="utf-8") as f:
@@ -406,7 +433,7 @@ class StravaData:
             logging.error("Respuesta de Strava sin tokens válidos; no se guarda: %s",
                           {k: v for k, v in (tokens or {}).items() if "token" not in k})
             return False
-        file_path = self.app.paths.data / "strava_tokens.json"
+        file_path = self.ruta_fichero(FICHERO_TOKENS)
         with open(file_path, "w") as f:
             json.dump(tokens, f)
             f.flush()
@@ -424,7 +451,7 @@ class StravaData:
         return tokens if self.save_tokens(tokens) else None
 
     def load_tokens(self):
-        file_path = self.app.paths.data / "strava_tokens.json"
+        file_path = self.ruta_fichero(FICHERO_TOKENS)
         try:
             with open(file_path) as f:
                 return json.load(f)

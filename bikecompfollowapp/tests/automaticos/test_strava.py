@@ -1,5 +1,6 @@
 """Tests de stravaConnect.StravaData sin conectarse a Strava (red y cliente simulados)."""
 
+import json
 import sqlite3
 import time
 from datetime import date, datetime
@@ -32,7 +33,8 @@ def actividad(tipo="Ride", distancia=10_000, tiempo=3600, desnivel=100):
 def test_guardar_y_cargar_tokens(strava, tmp_path):
     tokens = {"access_token": "a", "refresh_token": "r", "expires_at": 123}
     strava.save_tokens(tokens)
-    assert (tmp_path / "strava_tokens.json").exists()
+    assert (tmp_path / "BikeCFU" / "strava_tokens.json").exists()
+    assert not (tmp_path / "strava_tokens.json").exists(), "Ya no se guarda fuera de BikeCFU"
     assert strava.load_tokens() == tokens
 
 
@@ -41,7 +43,8 @@ def test_cargar_tokens_sin_fichero(strava):
 
 
 def test_cargar_tokens_fichero_corrupto(strava, tmp_path):
-    (tmp_path / "strava_tokens.json").write_text("{no es json")
+    (tmp_path / "BikeCFU").mkdir(exist_ok=True)
+    (tmp_path / "BikeCFU" / "strava_tokens.json").write_text("{no es json")
     assert strava.load_tokens() is None
 
 
@@ -304,7 +307,8 @@ def test_oauth_inicial_guarda_token_en_bdd(strava, monkeypatch):
 
 def test_token_vigente_se_copia_a_la_bdd_si_falta(strava, monkeypatch, tmp_path):
     import json
-    (tmp_path / "strava_tokens.json").write_text(json.dumps(
+    (tmp_path / "BikeCFU").mkdir(exist_ok=True)
+    (tmp_path / "BikeCFU" / "strava_tokens.json").write_text(json.dumps(
         {"access_token": "a", "refresh_token": "vigente", "expires_at": time.time() + 3600}))
     monkeypatch.setattr(strava, "refresh_token", lambda *a: pytest.fail("No debería refrescar"))
     assert strava.get_valid_token() == "a"
@@ -724,3 +728,52 @@ def test_columna_propia_no_se_pierde(strava_app, db):
 def test_fecha_viene_de_strava_start_date_local(strava_app, db):
     strava_app.guardarActividadesBDD("DaMario", None, [actividad_strava(1, fecha="2024-07-21T07:45:00")])
     assert db.execute("SELECT fecha FROM ActividadesStrava").fetchone() == ("2024-07-21",)
+
+
+# ---- Ficheros de Strava dentro de la carpeta de la app (BikeCFU) ----
+
+SECRETOS = "client_id: 12345\nclient_secret: abcdef\n\n\nurl: http://127.0.0.1:5000\n"
+
+
+def test_tokens_y_secretos_van_en_bikecfu(strava, tmp_path):
+    assert strava.ruta_fichero("strava_tokens.json") == tmp_path / "BikeCFU" / "strava_tokens.json"
+    assert strava.ruta_fichero("client_secrets.txt") == tmp_path / "BikeCFU" / "client_secrets.txt"
+
+
+def test_se_leen_los_secretos_de_bikecfu(strava, tmp_path):
+    (tmp_path / "BikeCFU").mkdir(exist_ok=True)
+    (tmp_path / "BikeCFU" / "client_secrets.txt").write_text(SECRETOS, encoding="utf-8")
+    strava.initConexion()
+    assert (strava.client_id, strava.client_secret) == ("12345", "abcdef")
+
+
+def test_ficheros_en_la_ubicacion_antigua_se_copian_a_bikecfu(strava, tmp_path):
+    tokens = {"access_token": "a", "refresh_token": "r", "expires_at": 9999999999}
+    (tmp_path / "strava_tokens.json").write_text(json.dumps(tokens), encoding="utf-8")
+    (tmp_path / "client_secrets.txt").write_text(SECRETOS, encoding="utf-8")
+    assert strava.load_tokens() == tokens
+    strava.initConexion()
+    assert strava.client_id == "12345"
+    for nombre in ("strava_tokens.json", "client_secrets.txt"):
+        assert (tmp_path / "BikeCFU" / nombre).read_text(encoding="utf-8") == (tmp_path / nombre).read_text(
+            encoding="utf-8"), nombre
+        assert (tmp_path / nombre).exists(), "El fichero antiguo no se borra"
+
+
+def test_si_ya_esta_en_bikecfu_no_se_pisa_con_el_antiguo(strava, tmp_path):
+    (tmp_path / "BikeCFU").mkdir(exist_ok=True)
+    nuevos = {"access_token": "nuevo", "refresh_token": "r2", "expires_at": 9999999999}
+    (tmp_path / "BikeCFU" / "strava_tokens.json").write_text(json.dumps(nuevos), encoding="utf-8")
+    (tmp_path / "strava_tokens.json").write_text(json.dumps({"access_token": "viejo"}), encoding="utf-8")
+    assert strava.load_tokens() == nuevos
+
+
+def test_sin_ficheros_no_se_copia_nada(strava, tmp_path):
+    assert strava.load_tokens() is None
+    assert not (tmp_path / "BikeCFU" / "strava_tokens.json").exists()
+
+
+def test_tokens_refrescados_se_guardan_en_bikecfu(strava, tmp_path):
+    tokens = {"access_token": "a", "refresh_token": "r", "expires_at": 9999999999}
+    assert strava.save_tokens(tokens) is True
+    assert json.loads((tmp_path / "BikeCFU" / "strava_tokens.json").read_text()) == tokens

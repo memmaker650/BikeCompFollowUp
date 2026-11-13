@@ -124,8 +124,8 @@ def test_columnas_limites_alerta(db):
 def test_columnas_archivoscomponentes(db):
     columnas = [f[1] for f in db.execute("PRAGMA table_info(archivoscomponentes)")]
     assert columnas == [
-        "id", "usuario", "elemento", "descripcion", "marca",
-        "fechaInsercion", "distanciaLimite", "tiempoLimite", "activo", "mesesLimite",
+        "id", "usuario", "elemento", "modalidad", "descripcion", "marca", "modelo",
+        "fechaInsercion", "distanciaLimite", "tiempoLimite", "activo", "mesesLimite", "otros",
     ]
 
 

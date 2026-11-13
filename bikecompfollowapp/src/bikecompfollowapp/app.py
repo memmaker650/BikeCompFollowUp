@@ -19,11 +19,12 @@ if __name__ == "__main__" or __package__ is None:
     import DB_Operations as dbops
     import notificaciones
     import registro
+    import rutas
     import stravaConnect
     import translations
 else:
     from . import DB_Operations as dbops
-    from . import notificaciones, registro, stravaConnect, translations
+    from . import notificaciones, registro, rutas, stravaConnect, translations
 t = translations.t
 
 # ---- Medidas de interfaz (Toga trabaja en píxeles; 1 cm ≈ 38 px a 96 ppp) ----
@@ -34,6 +35,9 @@ ALTO_MANTENIMIENTO = 260     # el doble ≈ 7 cm
 ESPACIO = 10                 # separación entre botones
 
 AZUL = rgb(0, 102, 204)
+ROJO_OBLIGATORIO = rgb(220, 0, 0)     # asterisco de los campos obligatorios
+# Campo "Otros" del alta de la cadena: número de velocidades
+VELOCIDADES_CADENA = [f"{n}v" for n in range(6, 14)]      # 6v ... 13v
 COLOR_ESTADISTICAS = "#FF8C00"
 # Ventana de Alerta (componentes a cambiar de manera urgente)
 ROJO_ALERTA = rgb(220, 0, 0)
@@ -43,6 +47,14 @@ TAMANO_VENTANA_ALERTA = (420, 260)
 COLOR_MANTENIMIENTO = "#1E64C8"
 
 # Pantalla previa a Mantenimiento: cuándo es el paso por taller y con qué bici
+VERDE_OK = rgb(0, 140, 60)          # título de la ventana "Cambios guardados"
+# Resumen de componentes cambiados: (clave del título, campo)
+COLUMNAS_RESUMEN_CAMBIADOS = [
+    ("col.componente", "componente"), ("col.modalidad", "modalidad"), ("col.fecha", "fecha"),
+    ("col.marca", "marca"), ("col.modelo", "modelo"), ("col.otros", "otros"),
+    ("col.km_max", "km"), ("col.horas_max", "horas"), ("col.meses_max", "meses"),
+]
+TAMANO_TITULO_MANTENIMIENTO = 18     # título de Mantenimiento / Paso por taller (antes 16)
 MECANICO_HOY, MECANICO_EN_FECHA = "hoy", "fecha"
 MODALIDADES_MANTENIMIENTO = ("Road", "MTB", "Gravel")      # valores de ActividadesStrava.Modalidad
 # Botones grandes de la pantalla previa y de las cuadrículas de componentes (mismo formato en ambas)
@@ -56,12 +68,15 @@ COMPONENTES_URGENTES_PRUEBA = ["Cadena", "Pastillas de Freno"]
 ELEMENTOS_POR_DEFECTO = ["Cadena", "Pastillas Freno", "Cubiertas"]
 
 # Columnas de las tablas de la pantalla Estadísticas: (clave de traducción de la cabecera, atributo de la fila)
+# Tabla 1: los límites (km, horas y meses máx) no se muestran, pero siguen en cada fila (ver filasComponentes)
 COLUMNAS_COMPONENTES = [
-    ("col.componente", "elemento"), ("col.descripcion", "descripcion"), ("col.fecha", "fechaInsercion"),
-    ("col.km_max", "distanciaLimite"), ("col.km_desde_alta", "distanciaDesdeInsercion"),
-    ("col.horas_max", "tiempoLimite"), ("col.horas_desde_alta", "horasDesdeInsercion"),
-    ("col.meses_max", "mesesLimite"), ("col.meses_desde_alta", "mesesDesdeInsercion"), ("col.activo", "activo"),
+    ("col.componente", "elemento"), ("col.modalidad", "modalidad"), ("col.descripcion", "descripcion"),
+    ("col.fecha", "fechaInsercion"), ("col.km_desde_alta", "distanciaDesdeInsercion"), ("col.horas_desde_alta", "horasDesdeInsercion"),
+    ("col.meses_desde_alta", "mesesDesdeInsercion"), ("col.activo", "activo"),
 ]
+
+# Columna Activo de la tabla 1: iconos en lugar de Sí / No
+ICONO_ACTIVO, ICONO_INACTIVO = "✅", "❌"
 COLUMNAS_BICICLETAS = [("col.id", "id"), ("col.marca", "marca"), ("col.modelo", "modelo"),
                        ("col.modalidad", "modalidad"), ("col.anio", "anio"), ("col.activa", "activa")]
 COLUMNAS_LIMITES = [("col.componente", "componente"), ("col.tipo_limite", "tipo_limite"), ("col.valor", "valor")]
@@ -78,13 +93,31 @@ def texto_numero(valor):
     return str(int(valor)) if valor.is_integer() else f"{valor:.1f}"
 
 
-def texto_activo(valor):
-    """Valor de la columna activo (1/0, True/False...) -> 'Sí' / 'No' en el idioma activo; vacío si no hay."""
+def es_activo(valor):
+    """Valor de una columna activo/activa (1/0, True/False, '1'/'0'...) -> True / False; None si no hay."""
     if valor is None or valor == "":
-        return ""
+        return None
     if isinstance(valor, str):
-        valor = valor.strip().lower() not in ("0", "false", "no")
-    return t("comun.si") if valor else t("comun.no")
+        return valor.strip().lower() not in ("0", "false", "no")
+    return bool(valor)
+
+
+def texto_activo(valor):
+    """'Sí' / 'No' en el idioma activo; vacío si no hay valor."""
+    activo = es_activo(valor)
+    return "" if activo is None else t("comun.si") if activo else t("comun.no")
+
+
+def icono_activo(valor):
+    """✅ si está activo, ❌ si no; vacío si no hay valor."""
+    activo = es_activo(valor)
+    return "" if activo is None else ICONO_ACTIVO if activo else ICONO_INACTIVO
+
+
+def filasComponentes(filas):
+    """Filas de componentesEstadisticas -> dicts por campo para la tabla 1, con la columna activo como icono.
+    Llevan también los campos que no se muestran (km, horas y meses máx)."""
+    return [{**dict(zip(dbops.CAMPOS_ESTADISTICAS, fila)), "activo": icono_activo(fila[-1])} for fila in filas]
 
 
 def pintar_fondo_boton(boton, color_hex):
@@ -187,7 +220,9 @@ class AppPaths:
 
         # 🟢 Caso 1: Toga (Briefcase dev / iOS / macOS app)
         if cls.app and hasattr(cls.app, "paths"):
-            return getattr(cls.app.paths, kind)
+            ruta = getattr(cls.app.paths, kind)
+            # Toga >= 0.5.7 añade ".../Data" en macOS: se quita para seguir en .../com.SkullWithGasMask
+            return rutas.raiz_datos(ruta) if kind == "data" else ruta
 
         # 🟡 Caso 2: desarrollo local (Cursor, PyCharm, python directo)
         project_root = Path(__file__).resolve().parent.parent.parent
@@ -249,7 +284,7 @@ class BikeCompFollowApp(toga.App):
         
         # Log: un fichero por día (BikeCFU/bikecfu_YYYYMMDD.log), ver registro.py
         self.log_handler = registro.configurar_log(AppPaths.get("data", "BikeCFU"))
-        print("DATA DIR:", self.paths.data)
+        print("DATA DIR:", AppPaths.base_dir("data"))
         print("Log DIR:", self.log_path)
 
         logging.info("Inicio BikeCompFollowApp iOS App!!!")
@@ -298,11 +333,17 @@ class BikeCompFollowApp(toga.App):
         self.main_window.content = contenido
 
     @staticmethod
-    def _campo(texto, widget):
-        """Fila de formulario: etiqueta a la izquierda y widget a la derecha."""
+    def _campo(texto, widget, obligatorio=False):
+        """Fila de formulario: etiqueta a la izquierda y widget a la derecha. Si es obligatorio, la etiqueta
+        lleva un asterisco rojo."""
         caja = toga.Box(style=Pack(direction=ROW, margin_bottom=10, align_items=CENTER))
-        caja.add(toga.Label(texto, style=Pack(margin_right=10)))
+        etiqueta = toga.Box(style=Pack(direction=ROW, margin_right=10))
+        etiqueta.add(toga.Label(texto))
+        if obligatorio:
+            etiqueta.add(toga.Label("*", style=Pack(color=ROJO_OBLIGATORIO, font_weight="bold")))
+        caja.add(etiqueta)
         caja.add(widget)
+        caja.obligatorio = obligatorio
         return caja
 
     @staticmethod
@@ -453,13 +494,13 @@ class BikeCompFollowApp(toga.App):
         self.boton_aceptar_alerta = caja.boton_aceptar
         return caja
 
-    def construirVentanaAviso(self, titulo, mensaje):
+    def construirVentanaAviso(self, titulo, mensaje, color=ROJO_ALERTA):
         """Contenido de una ventana de aviso: título en rojo y tamaño 24, el mensaje y el botón Aceptar,
         que cierra la ventana en la que se abra (ver _abrir_ventana_alerta)."""
         caja = toga.Box(style=Pack(direction=COLUMN, margin=20))
         caja.ventana = None
         caja.label_titulo = toga.Label(
-            titulo, style=Pack(color=ROJO_ALERTA, font_size=TAMANO_TITULO_ALERTA, font_weight="bold", margin_bottom=10))
+            titulo, style=Pack(color=color, font_size=TAMANO_TITULO_ALERTA, font_weight="bold", margin_bottom=10))
         caja.label_mensaje = toga.Label(mensaje, style=Pack(font_size=14))
         caja.boton_aceptar = toga.Button(
             t("aviso.aceptar"), on_press=lambda widget: self.cerrarVentanaAviso(caja), style=Pack(width=120, margin_top=20))
@@ -498,11 +539,18 @@ class BikeCompFollowApp(toga.App):
             for i, boton in enumerate(textos):
                 if i:
                     fila.add(toga.Box(style=Pack(width=ESPACIO)))
-                fila.add(toga.Button(
+                elegido = boton in self.componentes_cambiados and (clave, boton) not in SUBPANTALLAS_MANTENIMIENTO
+                estilo = dict(estilo_boton)
+                if elegido:
+                    estilo.update(background_color=COLOR_SELECCIONADO, color="#FFFFFF")
+                b = toga.Button(
                     t(boton),
                     on_press=lambda widget, b=boton: self.pulsar_boton_mantenimiento(clave, b),
-                    style=Pack(**estilo_boton),
-                ))
+                    style=Pack(**estilo),
+                )
+                if elegido:
+                    pintar_fondo_boton(b, COLOR_SELECCIONADO)
+                fila.add(b)
             rejilla.add(fila)
 
         contenido = toga.Box(style=Pack(direction=COLUMN, flex=1))
@@ -513,14 +561,36 @@ class BikeCompFollowApp(toga.App):
                   fecha=self.fecha_mecanico.isoformat()),
                 style=Pack(margin_bottom=ESPACIO, color=AZUL))
             contenido.add(self.label_preparacion)
+        # Componentes elegidos hasta ahora (en esta y en las otras cuadrículas)
+        self.label_cambiados = toga.Label(self.texto_componentes_cambiados(), style=Pack(margin_bottom=ESPACIO))
+        contenido.add(self.label_cambiados)
         contenido.add(rejilla)
+
+        hay_cambios = bool(self.componentes_cambiados)
+        self.boton_confirmar_cambios = self._boton(t("mant.confirmar_cambios"), self.confirmar_cambios_directos)
+        self.boton_anadir_detalles = self._boton(t("mant.anadir_detalles"), self.empezar_detalles_cambiados)
+        self.boton_confirmar_cambios.enabled = self.boton_anadir_detalles.enabled = hay_cambios
 
         main_box = toga.Box(style=Pack(direction=COLUMN, margin=10))
         main_box.add(contenido)
         main_box.add(self._barra_inferior(
             izquierda=self._boton_volver(lambda: self.volver_desde_mantenimiento(clave)),
+            derecha=toga.Box(children=[self.boton_confirmar_cambios, self.boton_anadir_detalles],
+                             style=Pack(direction=ROW)),
         ))
         return main_box
+
+    @property
+    def componentes_cambiados(self):
+        """Pila de componentes cambiados (claves de botón, en el orden en que se eligieron)."""
+        if getattr(self, "_componentes_cambiados", None) is None:
+            self._componentes_cambiados = []
+        return self._componentes_cambiados
+
+    def texto_componentes_cambiados(self):
+        if not self.componentes_cambiados:
+            return t("mant.elige_cambiados")
+        return t("mant.cambiados", lista=", ".join(t(c) for c in self.componentes_cambiados))
 
     def ir_a_mantenimiento(self, clave):
         self._mostrar(self.construir_pantalla_mantenimiento(clave))
@@ -533,8 +603,12 @@ class BikeCompFollowApp(toga.App):
             self.ir_a_mantenimiento(anterior)
 
     # -------- Pantalla previa a Mantenimiento: MECÁNICO HOY / EN FECHA + ROAD / MTB / GRAVEL --------
-    def ir_a_preparacion_mantenimiento(self, widget=None):
-        """Desde el menú: se empieza sin nada elegido."""
+    def ir_a_preparacion_mantenimiento(self, widget=None, volver=None):
+        """Desde el menú o desde Estadísticas (Cambio Mecánico): se empieza sin nada elegido. `volver` es la
+        pantalla a la que lleva su Volver; sin él, el menú del usuario."""
+        self.volver_preparacion = volver or self.ir_a_menu_usuario
+        self.componentes_cambiados.clear()
+        self.detalles_cambiados.clear()
         self.mecanico = None
         self.fecha_mecanico = date.today()
         self.modalidad_mantenimiento = None
@@ -596,7 +670,8 @@ class BikeCompFollowApp(toga.App):
         ], style=Pack(direction=COLUMN))
 
         contenido = toga.Box(children=[
-            toga.Label(t("menu.mantenimiento"), style=Pack(font_size=16, margin_bottom=20)),
+            toga.Label(t("menu.mantenimiento").upper(), style=Pack(font_size=TAMANO_TITULO_MANTENIMIENTO,
+                                                                    margin_bottom=20)),
             arriba,
             toga.Box(style=Pack(height=40)),
             abajo,
@@ -605,7 +680,7 @@ class BikeCompFollowApp(toga.App):
         self.boton_continuar_mantenimiento = self._boton(t("preparacion.continuar"), self.continuar_a_mantenimiento)
         self.boton_continuar_mantenimiento.enabled = self.preparacion_completa()
         return self._pantalla(contenido, self._barra_inferior(
-            izquierda=self._boton_volver(self.ir_a_menu_usuario),
+            izquierda=self._boton_volver(lambda: getattr(self, "volver_preparacion", self.ir_a_menu_usuario)()),
             derecha=self.boton_continuar_mantenimiento,
         ))
 
@@ -635,17 +710,167 @@ class BikeCompFollowApp(toga.App):
         self.ir_a_mantenimiento(PANTALLA_MANTENIMIENTO)
 
     def pulsar_boton_mantenimiento(self, clave, boton):
-        """Un botón abre una subpantalla si la tiene; si no, el alta del componente."""
+        """Un botón abre una subpantalla si la tiene; si no, marca o desmarca el componente como cambiado
+        (se pueden elegir varios, también de distintas cuadrículas)."""
         destino = SUBPANTALLAS_MANTENIMIENTO.get((clave, boton))
         if destino:
             self.ir_a_mantenimiento(destino)
+            return
+        if boton in self.componentes_cambiados:
+            self.componentes_cambiados.remove(boton)
+            self.detalles_cambiados.pop(boton, None)
         else:
-            self._mostrar(self.construir_pantalla_cinco(
-                self.usuarioSeleccionado,
-                elemento=translations.default_text(boton),
-                volver=lambda: self.ir_a_mantenimiento(clave),
-                fecha=getattr(self, "fecha_mecanico", None),
-            ))
+            self.componentes_cambiados.append(boton)
+        self.clave_cuadricula = clave
+        self.ir_a_mantenimiento(clave)
+
+    # -------- Componentes cambiados: confirmar directamente o añadir detalles uno a uno --------
+    @property
+    def detalles_cambiados(self):
+        """{clave de botón: detalles} de los componentes cambiados (lo escrito en su pantalla de detalles)."""
+        if getattr(self, "_detalles_cambiados", None) is None:
+            self._detalles_cambiados = {}
+        return self._detalles_cambiados
+
+    def detalle_por_defecto(self, boton):
+        """Detalles de un componente cambiado sin rellenar: fecha del mecánico, modalidad elegida y límites
+        por defecto del componente."""
+        elemento = translations.default_text(boton)
+        # mismo nombre que en la tabla Componente (sin distinguir mayúsculas), como en la pantalla de alta
+        catalogo = self.db.nombresComponentes(por_defecto=ELEMENTOS_POR_DEFECTO)
+        elemento = next((e for e in catalogo if e.casefold() == elemento.casefold()), elemento)
+        modalidad = getattr(self, "modalidad_mantenimiento", None) or self.db.modalidadDeUsuario(self.usuarioSeleccionado)
+        km, horas, meses = self.db.limitesComponente(elemento, self.usuarioSeleccionado, modalidad)
+        fecha = getattr(self, "fecha_mecanico", None) or date.today()
+        return dict(fecha=fecha.isoformat(), elemento=elemento, modalidad=modalidad, marca="", modelo="", otros="",
+                    km="" if km is None else str(km), horas="" if horas is None else str(horas),
+                    meses="" if meses is None else str(meses))
+
+    def detalle_de(self, boton):
+        return self.detalles_cambiados.get(boton) or self.detalle_por_defecto(boton)
+
+    def guardar_cambio(self, detalle) -> bool:
+        """Guarda en BD un componente cambiado. Límites vacíos -> los del componente."""
+        elemento, modalidad, usuario = detalle["elemento"], detalle["modalidad"], self.usuarioSeleccionado
+        km, horas, meses = self.db.limitesComponente(elemento, usuario, modalidad)
+        otros = (detalle.get("otros") or None) if self.es_cadena(elemento) else None
+        return self.db.guardarComponente(
+            detalle["fecha"], usuario, elemento, None, (detalle.get("marca") or "").strip(),
+            (detalle.get("km") or "").strip() or km, (detalle.get("horas") or "").strip() or horas,
+            (detalle.get("meses") or "").strip() or meses, modalidad, otros,
+            (detalle.get("modelo") or "").strip() or None)
+
+    def guardar_cambios(self) -> bool:
+        """Guarda todos los componentes de la pila; si todo va bien la vacía, avisa y vuelve a la pantalla
+        desde la que se entró en Mantenimiento (menú o Estadísticas)."""
+        detalles = [self.detalle_de(b) for b in self.componentes_cambiados]
+        fallidos = [d["elemento"] for d in detalles if not self.guardar_cambio(d)]
+        if fallidos:
+            logging.error("No se pudieron guardar los componentes cambiados: %s", fallidos)
+            if getattr(self, "label_estado_cambios", None) is not None:
+                self._mostrar_estado(self.label_estado_cambios, t("estado.cambios_error"), ok=False)
+            return False
+        nombres = [t(b) for b in self.componentes_cambiados]
+        logging.info("Componentes cambiados guardados (%s): %s", self.usuarioSeleccionado, nombres)
+        self.componentes_cambiados.clear()
+        self.detalles_cambiados.clear()
+        getattr(self, "volver_preparacion", self.ir_a_menu_usuario)()
+        self.aviso_cambios_guardados = self.construirVentanaAviso(
+            t("aviso.cambios_guardados_titulo"),
+            "\n".join([t("aviso.cambios_guardados"), ""] + [f"• {n}" for n in nombres]), color=VERDE_OK)
+        self._abrir_ventana_alerta(self.aviso_cambios_guardados, t("aviso.cambios_guardados_titulo"))
+        return True
+
+    def confirmar_cambios_directos(self, widget=None) -> bool:
+        """Confirmar Cambios (en la cuadrícula): guarda los elegidos con los datos por defecto."""
+        self.label_estado_cambios = self.label_cambiados
+        return self.guardar_cambios()
+
+    def empezar_detalles_cambiados(self, widget=None):
+        """Añadir detalles Componentes Cambiados: una pantalla de alta por cada componente de la pila."""
+        if self.componentes_cambiados:
+            self.ir_a_detalle_cambiado(0)
+
+    def ir_a_detalle_cambiado(self, indice):
+        self.indice_detalle = indice
+        boton = self.componentes_cambiados[indice]
+        detalle = self.detalle_de(boton)
+        total = len(self.componentes_cambiados)
+        ultimo = indice == total - 1
+        self._mostrar(self.construir_pantalla_cinco(
+            self.usuarioSeleccionado,
+            elemento=detalle["elemento"],
+            fecha=date.fromisoformat(detalle["fecha"]) if detalle["fecha"] else None,
+            modalidad=detalle["modalidad"],
+            volver=self.anterior_detalle_cambiado,
+            subtitulo=t("detalles.paso", componente=t(boton).upper(), n=indice + 1, total=total),
+            valores=detalle,
+            siguiente=(t("detalles.ver_resumen") if ultimo else t("detalles.siguiente"), self.siguiente_detalle_cambiado),
+        ))
+
+    def leer_detalle_formulario(self):
+        return dict(
+            fecha=(self.entrada_fecha.value or "").strip(), elemento=self.selection_elemento.value,
+            modalidad=self.selection_modalidad.value, marca=self.marca_texto.value or "",
+            modelo=self.modelo_texto.value or "", otros=self.selection_otros.value or "",
+            km=self.distancialim_texto.value or "", horas=self.tiempolim_texto.value or "",
+            meses=self.meseslim_texto.value or "")
+
+    def apuntar_detalle_actual(self):
+        self.detalles_cambiados[self.componentes_cambiados[self.indice_detalle]] = self.leer_detalle_formulario()
+
+    def siguiente_detalle_cambiado(self, widget=None) -> bool:
+        """Apunta los detalles (sin guardar aún en BD) y pasa al siguiente componente o, tras el último, al
+        resumen. Con algún obligatorio vacío se queda en la pantalla."""
+        detalle = self.leer_detalle_formulario()
+        if not (detalle["fecha"] and detalle["elemento"] and detalle["modalidad"]):
+            self._mostrar_estado(self.label_pantalla_dos, t("estado.faltan_obligatorios"), ok=False)
+            return False
+        try:
+            date.fromisoformat(detalle["fecha"])
+        except ValueError:
+            self._mostrar_estado(self.label_pantalla_dos, t("estado.fecha_invalida"), ok=False)
+            return False
+        self.apuntar_detalle_actual()
+        if self.indice_detalle + 1 < len(self.componentes_cambiados):
+            self.ir_a_detalle_cambiado(self.indice_detalle + 1)
+        else:
+            self.ir_a_resumen_cambiados()
+        return True
+
+    def anterior_detalle_cambiado(self):
+        """Volver: al componente anterior o, desde el primero, a la cuadrícula. Lo escrito se conserva."""
+        self.apuntar_detalle_actual()
+        if self.indice_detalle > 0:
+            self.ir_a_detalle_cambiado(self.indice_detalle - 1)
+        else:
+            self.ir_a_mantenimiento(getattr(self, "clave_cuadricula", PANTALLA_MANTENIMIENTO))
+
+    # -------- Resumen de componentes cambiados: Confirmar / Editar --------
+    def ir_a_resumen_cambiados(self):
+        self._mostrar(self.construir_resumen_cambiados())
+
+    def construir_resumen_cambiados(self):
+        filas = []
+        for boton in self.componentes_cambiados:
+            d = self.detalle_de(boton)
+            filas.append(dict(componente=t(boton), elemento=d["elemento"], modalidad=d["modalidad"], fecha=d["fecha"],
+                              marca=d["marca"], modelo=d["modelo"],
+                              otros=d["otros"] if self.es_cadena(d["elemento"]) else "",
+                              km=d["km"], horas=d["horas"], meses=d["meses"]))
+        self.tablaResumenCambiados = toga.Table(
+            columns=_columnas(COLUMNAS_RESUMEN_CAMBIADOS),
+            data=filas, style=Pack(flex=1, height=60 + 28 * len(filas)))
+        self.label_estado_cambios = toga.Label("", style=Pack(margin_top=ESPACIO))
+        self.boton_confirmar_resumen = self._boton(t("resumen.confirmar"), lambda w: self.guardar_cambios())
+        self.boton_editar_resumen = self._boton(t("resumen.editar"), lambda w: self.ir_a_detalle_cambiado(0))
+        contenido = toga.Box(children=[
+            toga.Label(t("resumen.titulo"), style=Pack(font_size=16, margin_bottom=ESPACIO)),
+            self.tablaResumenCambiados,
+            self.label_estado_cambios,
+            toga.Box(children=[self.boton_confirmar_resumen, self.boton_editar_resumen], style=Pack(direction=ROW)),
+        ], style=Pack(direction=COLUMN, flex=1))
+        return self._pantalla(contenido, self._barra_inferior())
 
     # -------- Pantalla 2 (alta de usuario / vehículo) --------
     def ir_a_pantalla_dos(self, widget=None):
@@ -729,14 +954,14 @@ class BikeCompFollowApp(toga.App):
         )
 
         try:
-            data = [(*fila[:-1], texto_activo(fila[-1])) for fila in self.db.componentesEstadisticas(valor)]
+            data = filasComponentes(self.db.componentesEstadisticas(valor))
             logging.info("Datos de TABLA LEÍDOS correctamente.")
         except sqlite3.Error as error:
             logging.error("Error al leer la tabla de componentes de Estadísticas: %s", error)
             self._mostrar_estado(self.label_pantalla_dos, t("estado.lectura_error"), ok=False)
             data = []
 
-        self.componentes_disponibles = [fila[0] for fila in data if fila and fila[0] is not None]
+        self.componentes_disponibles = [fila["elemento"] for fila in data if fila.get("elemento") is not None]
         # Altura según nº de filas (Toga no la calcula sola). Tope para listas largas → scroll dentro de la tabla.
         _h_cabecera, _h_fila, _h_max = 28, 22, 520
         _altura_tabla = min(_h_cabecera + max(len(data), 1) * _h_fila, _h_max)
@@ -802,7 +1027,9 @@ class BikeCompFollowApp(toga.App):
 
         botones_derecha = toga.Box(
             children=[
-                self._boton(t("estadisticas.nuevo_componente"), lambda widget: self.ir_a_pantalla_cinco(widget, valor)),
+                # Cambio Mecánico: a Mantenimiento / Paso por taller; su Volver regresa a Estadísticas
+                self._boton(t("estadisticas.nuevo_componente"), lambda widget: self.ir_a_preparacion_mantenimiento(
+                    widget, volver=lambda: self.ir_a_pantalla_tres(None, valor))),
                 self._boton(t("estadisticas.nuevo_limite"), lambda widget: self.PantallaNuevaAlerta(
                     self.obtener_componente_seleccionado(),
                     self.componentes_disponibles,
@@ -861,28 +1088,45 @@ class BikeCompFollowApp(toga.App):
         componente = self.obtener_componente_seleccionado()
         self.tablaLimites.data = self.db.seleccionarLimitesComponente(componente) if componente else []
 
-    def anadirComponente(self, valor1, user, valor2, valor3, valor4, valor5=None, valor6=None, valor7=None):
-        """valor5/6/7: km, horas y meses límite. Si se dejan vacíos se usan los del componente."""
+    def anadirComponente(self, valor1, user, valor2, valor3, valor4, valor5=None, valor6=None, valor7=None,
+                         valor8=None, valor9=None, valor10=None):
+        """valor3: descripción (la pantalla de alta ya no la tiene: None). valor5/6/7: km, horas y meses límite
+        (vacíos -> los del componente). valor8: modalidad (Road/MTB/Gravel); sin ella, la de la bici del usuario.
+        valor9: otros (velocidades de la cadena), solo se guarda para la cadena. valor10: modelo del componente."""
         logging.info("Dentro añadir Componente.")
 
-        km_defecto, horas_defecto, meses_defecto = self.db.limitesComponente(valor2.value, user)
+        modalidad = getattr(valor8, "value", None) or self.db.modalidadDeUsuario(user)
+        km_defecto, horas_defecto, meses_defecto = self.db.limitesComponente(valor2.value, user, modalidad)
         distancia = (getattr(valor5, "value", None) or "").strip() or km_defecto
         tiempo = (getattr(valor6, "value", None) or "").strip() or horas_defecto
         meses = (getattr(valor7, "value", None) or "").strip() or meses_defecto
         f = (valor1.value or "").strip() or datetime.today().strftime("%Y-%m-%d")
 
-        if not self.db.guardarComponente(f, user, valor2.value, valor3.value, valor4.value, distancia, tiempo, meses):
+        descripcion = getattr(valor3, "value", None) or None
+        otros = (getattr(valor9, "value", None) or None) if self.es_cadena(valor2.value) else None
+        modelo = (getattr(valor10, "value", None) or "").strip() or None
+        if not self.db.guardarComponente(f, user, valor2.value, descripcion, valor4.value, distancia, tiempo, meses,
+                                         modalidad, otros, modelo):
             self._mostrar_estado(self.label_pantalla_dos, t("estado.componente_error"), ok=False)
             return False
         self._mostrar_estado(self.label_pantalla_dos, t("estado.entrada_ok"))
         return True
 
-    def cargar_componente(self, entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto, meseslim_texto=None) -> bool:
-        return self.anadirComponente(entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto, meseslim_texto)
+    def cargar_componente(self, entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto, meseslim_texto=None, selection_modalidad=None, selection_otros=None, modelo_texto=None) -> bool:
+        # Campos obligatorios (*): fecha, componente y modalidad
+        if not ((entrada_fecha.value or "").strip() and getattr(selection_elemento, "value", None)
+                and (selection_modalidad is None or getattr(selection_modalidad, "value", None))):
+            self._mostrar_estado(self.label_pantalla_dos, t("estado.faltan_obligatorios"), ok=False)
+            return False
+        return self.anadirComponente(entrada_fecha, usuarioSeleccionado, selection_elemento, descripcion_texto, marca_texto, distancialim_texto, tiempolim_texto, meseslim_texto, selection_modalidad, selection_otros, modelo_texto)
 
     # -------- Pantalla 5 (alta de componente) --------
-    def construir_pantalla_cinco(self, valor, elemento=None, volver=None, fecha=None):
-        """Alta de componente. `elemento` lo preselecciona; `volver` es la pantalla de retorno."""
+    def construir_pantalla_cinco(self, valor, elemento=None, volver=None, fecha=None, modalidad=None,
+                                 subtitulo=None, valores=None, siguiente=None):
+        """Alta de componente. `elemento` lo preselecciona; `volver` es la pantalla de retorno; `modalidad`
+        (la elegida en Mantenimiento) preselecciona la modalidad; sin ella, la de la bici del usuario.
+        Para los detalles de los componentes cambiados: `subtitulo` (el COMPONENTE), `valores` (lo ya escrito)
+        y `siguiente` = (texto, acción), que sustituye a + Componente y Cargar."""
         tipos_elemento = self.db.nombresComponentes(por_defecto=ELEMENTOS_POR_DEFECTO)
         if elemento:
             coincidencia = next((e for e in tipos_elemento if e.casefold() == elemento.casefold()), None)
@@ -900,45 +1144,126 @@ class BikeCompFollowApp(toga.App):
         self.label_usuario_seleccionado = toga.Label(valor or "")
         linea_usuario = toga.Box(
             children=[self.label_usuario_componente, self.label_usuario_seleccionado],
-            style=Pack(direction=ROW, margin_bottom=20),
+            style=Pack(direction=ROW, margin_bottom=10 if subtitulo else 20),
         )
+        self.label_subtitulo_componente = None
+        if subtitulo:
+            self.label_subtitulo_componente = toga.Label(
+                subtitulo, style=Pack(font_size=18, font_weight="bold", color=AZUL, margin_bottom=15))
         fecha_alta = fecha.isoformat() if fecha else datetime.today().strftime("%Y-%m-%d")
         self.entrada_fecha = self._texto(t("campo.fecha_placeholder"), value=fecha_alta)
         self.selection_elemento = toga.Selection(items=tipos_elemento, style=Pack(width=ANCHO_CAMPO))
         if elemento:
             self.selection_elemento.value = elemento
-        self.descripcion_texto = self._texto()
         self.marca_texto = self._texto()
+        self.modelo_texto = self._texto()
+        # Otros: solo para la cadena (número de velocidades); vacío = sin indicar
+        self.selection_otros = toga.Selection(items=[""] + VELOCIDADES_CADENA, style=Pack(width=ANCHO_CAMPO))
         self.distancialim_texto = self._texto()
         self.tiempolim_texto = self._texto()
         self.meseslim_texto = self._texto()
         self.usuario_alta_componente = valor
-        # Límites por defecto del componente elegido; se rellenan de nuevo al cambiar de componente
+        # Modalidad obligatoria: la elegida en Mantenimiento o, si no, la de la bici del usuario
+        self.selection_modalidad = toga.Selection(items=list(MODALIDADES_MANTENIMIENTO), style=Pack(width=ANCHO_CAMPO))
+        self.selection_modalidad.value = (modalidad if modalidad in MODALIDADES_MANTENIMIENTO
+                                          else self.db.modalidadDeUsuario(valor))
+        # Límites por defecto del componente y modalidad elegidos; se rellenan de nuevo al cambiar cualquiera
+        self.fila_otros = self._campo(t("campo.otros"), self.selection_otros)
         self.rellenar_limites_por_defecto()
-        self.selection_elemento.on_change = self.rellenar_limites_por_defecto
+        if valores:     # detalles ya escritos de un componente cambiado (al editar o volver atrás)
+            self.marca_texto.value = valores.get("marca") or ""
+            self.modelo_texto.value = valores.get("modelo") or ""
+            if valores.get("otros") in VELOCIDADES_CADENA:
+                self.selection_otros.value = valores["otros"]
+            self.distancialim_texto.value = valores.get("km") or ""
+            self.tiempolim_texto.value = valores.get("horas") or ""
+            self.meseslim_texto.value = valores.get("meses") or ""
+        self.selection_elemento.on_change = self.cambiar_componente_alta
+        self.selection_modalidad.on_change = self.rellenar_limites_por_defecto
 
         contenido_box = self._formulario()
         contenido_box.add(self.label_pantalla_dos)
         contenido_box.add(linea_usuario)
-        contenido_box.add(self._campo(t("campo.fecha"), self.entrada_fecha))
-        contenido_box.add(self._campo(t("campo.elemento"), self.selection_elemento))
-        contenido_box.add(self._campo(t("campo.descripcion"), self.descripcion_texto))
-        contenido_box.add(self._campo(t("campo.marca"), self.marca_texto))
-        contenido_box.add(self._campo(t("campo.distancia_limite"), self.distancialim_texto))
-        contenido_box.add(self._campo(t("campo.tiempo_limite"), self.tiempolim_texto))
-        contenido_box.add(self._campo(t("campo.meses_limite"), self.meseslim_texto))
-        contenido_box.add(self._boton(t("comun.cargar"), lambda widget: self.cargar_componente(
-            self.entrada_fecha, self.usuarioSeleccionado, self.selection_elemento, self.descripcion_texto,
-            self.marca_texto, self.distancialim_texto, self.tiempolim_texto, self.meseslim_texto,
-        )))
+        if self.label_subtitulo_componente is not None:
+            contenido_box.add(self.label_subtitulo_componente)
+        contenido_box.add(self._campo(t("campo.fecha"), self.entrada_fecha, obligatorio=True))
+        contenido_box.add(self._campo(t("campo.elemento"), self.selection_elemento, obligatorio=True))
+        contenido_box.add(self._campo(t("campo.modalidad"), self.selection_modalidad, obligatorio=True))
+        self.fila_marca = self._campo(t("campo.marca"), self.marca_texto)
+        contenido_box.add(self.fila_marca)
+        self.fila_modelo = self._campo(t("campo.modelo"), self.modelo_texto)
+        contenido_box.add(self.fila_modelo)
+        self.formulario_alta = contenido_box
+        self.mostrar_campo_otros()     # la fila Otros va justo después de Modelo, solo para la cadena
+
+        # Sección de límites (ninguno obligatorio: vacíos se usan los del componente)
+        self.seccion_limites = toga.Box(style=Pack(direction=COLUMN, margin_top=10, margin_bottom=10))
+        self.seccion_limites.add(toga.Label(t("alta.limites"), style=Pack(font_size=15, font_weight="bold",
+                                                                          margin_bottom=8)))
+        self.seccion_limites.add(self._campo(t("campo.distancia_limite"), self.distancialim_texto))
+        self.seccion_limites.add(self._campo(t("campo.tiempo_limite"), self.tiempolim_texto))
+        self.seccion_limites.add(self._campo(t("campo.meses_limite"), self.meseslim_texto))
+        contenido_box.add(self.seccion_limites)
+
+        if siguiente:   # detalles de componentes cambiados: se apuntan y se guardan todos en el resumen
+            texto_siguiente, accion_siguiente = siguiente
+            self.boton_siguiente_detalle = self._boton(texto_siguiente, accion_siguiente)
+            contenido_box.add(self.boton_siguiente_detalle)
+        else:
+            # + Componente: guarda como Cargar y deja el formulario listo para dar de alta otro seguido
+            contenido_box.add(self._boton(t("alta.mas_componente"), self.guardar_y_otro_componente))
+            contenido_box.add(self._boton(t("comun.cargar"), lambda widget: self.guardar_componente_alta()))
+        contenido_box.add(toga.Label(t("alta.leyenda_obligatorio"),
+                                     style=Pack(color=ROJO_OBLIGATORIO, font_size=11, margin_top=10)))
 
         volver = volver or (lambda: self.ir_a_pantalla_tres(None, valor))
         return self._pantalla(contenido_box, self._barra_inferior(izquierda=self._boton_volver(volver)))
 
+    def guardar_componente_alta(self) -> bool:
+        """Guarda el componente de la pantalla de alta con lo que hay en el formulario."""
+        return self.cargar_componente(
+            self.entrada_fecha, self.usuarioSeleccionado, self.selection_elemento, None,
+            self.marca_texto, self.distancialim_texto, self.tiempolim_texto, self.meseslim_texto,
+            self.selection_modalidad, self.selection_otros, self.modelo_texto,
+        )
+
+    def guardar_y_otro_componente(self, widget=None) -> bool:
+        """Botón + Componente: guarda el componente y, si se ha guardado, limpia Marca, Modelo y Otros y vuelve a
+        poner los límites por defecto. Se mantienen fecha, elemento y modalidad. Si no se guarda (falta algún
+        obligatorio o error), el formulario se queda como estaba para corregirlo."""
+        if not self.guardar_componente_alta():
+            return False
+        self.marca_texto.value = ""
+        self.modelo_texto.value = ""
+        self.selection_otros.value = ""
+        self.rellenar_limites_por_defecto()
+        return True
+
+    def es_cadena(self, elemento):
+        return dbops._regla_limites(elemento) == dbops._regla_limites("cadena")
+
+    def mostrar_campo_otros(self):
+        """El campo Otros (velocidades) solo está en el formulario para la cadena. Se quita y se vuelve a poner
+        (en Toga 0.5 'display: none' solo funciona en web; en macOS la fila seguiría ocupando su sitio)."""
+        formulario = self.formulario_alta
+        es_cadena = self.es_cadena(self.selection_elemento.value)
+        esta = self.fila_otros in formulario.children
+        if es_cadena and not esta:
+            formulario.insert(formulario.children.index(self.fila_modelo) + 1, self.fila_otros)
+        elif not es_cadena and esta:
+            formulario.remove(self.fila_otros)
+        if not es_cadena:
+            self.selection_otros.value = ""
+
+    def cambiar_componente_alta(self, widget=None):
+        self.mostrar_campo_otros()
+        self.rellenar_limites_por_defecto()
+
     def rellenar_limites_por_defecto(self, widget=None):
         """Pone en los cuadros de km, horas y meses límite los valores por defecto del componente elegido."""
+        modalidad = getattr(getattr(self, "selection_modalidad", None), "value", None)
         km, horas, meses = self.db.limitesComponente(
-            self.selection_elemento.value, getattr(self, "usuario_alta_componente", None))
+            self.selection_elemento.value, getattr(self, "usuario_alta_componente", None), modalidad)
         self.distancialim_texto.value = "" if km is None else str(km)
         self.tiempolim_texto.value = "" if horas is None else str(horas)
         self.meseslim_texto.value = "" if meses is None else str(meses)

@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from bikecompfollowapp.app import COLUMNAS_COMPONENTES
+from bikecompfollowapp.DB_Operations import NUM_COLUMNAS_ESTADISTICAS
 
 USUARIO = "memmaker650"
 
@@ -28,7 +28,7 @@ def nombres(con):
 def test_bd_bloqueada_muestra_los_nombres_de_los_componentes(app, otro_programa):
     filas = app.db.componentesEstadisticas(USUARIO)
     assert sorted(f[0] for f in filas) == nombres(app.sqliteConnection)
-    assert all(len(f) == len(COLUMNAS_COMPONENTES) for f in filas)
+    assert all(len(f) == NUM_COLUMNAS_ESTADISTICAS for f in filas)
 
 
 def test_bd_bloqueada_no_congela_la_pantalla(app, otro_programa):

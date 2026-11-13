@@ -37,8 +37,11 @@ ESPERA_CORTA_BD_MS = 500
 MODALIDADES_ESTADISTICAS = ("Road", "MTB", "Gravel")
 ANIOS_ESTADISTICAS = 3
 
-# Columnas que devuelve BaseDatos.componentesEstadisticas (las de la tabla 1 de Estadísticas)
-NUM_COLUMNAS_ESTADISTICAS = 10
+# Campos (en orden) de cada fila que devuelve BaseDatos.componentesEstadisticas
+CAMPOS_ESTADISTICAS = ("elemento", "descripcion", "fechaInsercion", "distanciaLimite", "distanciaDesdeInsercion",
+                       "tiempoLimite", "horasDesdeInsercion", "mesesLimite", "mesesDesdeInsercion", "modalidad",
+                       "activo")
+NUM_COLUMNAS_ESTADISTICAS = len(CAMPOS_ESTADISTICAS)
 
 
 # ---- Límites por defecto de los componentes ----
@@ -151,8 +154,9 @@ def _regla_limites(nombre):
                  if all(palabra in normalizado for palabra in palabras)), None)
 
 
-def limitesComponente(conexion, componente, usuario=None):
-    """(km, horas, meses) por defecto de un componente para la bici del usuario, leídos de la tabla Componente.
+def limitesComponente(conexion, componente, usuario=None, modalidad=None):
+    """(km, horas, meses) por defecto de un componente para una modalidad (Road/Gravel/MTB), leídos de la
+    tabla Componente. Sin modalidad se usa la de la bici del usuario.
 
     El componente se busca por nombre (sin mayúsculas ni acentos) o, si no está tal cual, por la misma regla de
     LIMITES_POR_COMPONENTE ('Cubiertas' -> 'Cubierta', 'PASTILLA/S FRENO' -> 'pastillas freno'). Si no está en
@@ -160,7 +164,8 @@ def limitesComponente(conexion, componente, usuario=None):
     if not componente:
         return limitesPorDefecto(componente)
     try:
-        bici = tipoBici(vehiculoDeUsuario(conexion, usuario)) if usuario else "Road"
+        bici = modalidad if modalidad in TIPOS_BICI else (tipoBici(vehiculoDeUsuario(conexion, usuario))
+                                                           if usuario else "Road")
         filas = conexion.execute(f"SELECT nombre, tipo{bici}, limite{bici} FROM Componente").fetchall()
     except sqlite3.Error as error:
         logging.warning("No se pudieron leer los límites de Componente: %s", error)
@@ -239,7 +244,8 @@ COLUMNAS_NUEVAS_DATOS_COMPONENTE = {"horas": "FLOAT NOT NULL DEFAULT 0"}
 # Solo cuentan las salidas en bici (ni rodillo, ni carrera, ni caminatas...)
 TIPOS_KM_COMPONENTE = ("Ride",)
 
-# Suma, para cada alta de componente, los km y las horas de uso (duracion) de las actividades del mismo usuario desde su fecha de alta
+# Suma, para cada alta de componente, los km y las horas de uso (duracion) de las actividades de su misma
+# modalidad (un componente de Road no suma salidas de MTB), del mismo usuario desde su fecha de alta
 # (incluido ese día). fecha = día del cálculo. Las actividades sin fecha no cuentan.
 SQL_CALCULAR_KM_COMPONENTES = """
 INSERT INTO datosComponente (idComponente, usuario, componente, fecha, km, horas, num_actividades, activo)
@@ -249,6 +255,7 @@ FROM archivoscomponentes ac
 LEFT JOIN ActividadesStrava a
        ON a.user = ac.usuario
       AND a.tipo IN ({tipos})
+      AND a.Modalidad = ac.modalidad
       AND a.fecha IS NOT NULL
       AND a.fecha >= date(ac.fechaInsercion)
 WHERE (:usuario IS NULL OR ac.usuario = :usuario)
@@ -285,13 +292,77 @@ def asegurarTablaDatosComponente(conexion) -> None:
 DESCRIPCION_POR_DEFECTO = "POR DEFECTO"
 
 
+# Componentes que cada usuario tiene montados. modalidad es obligatoria: la de la bici en la que va montado.
+SQL_CREAR_ARCHIVOS_COMPONENTES = """CREATE TABLE IF NOT EXISTS archivoscomponentes (
+    id INTEGER PRIMARY KEY,
+    usuario NOT NULL,
+    elemento TEXT NOT NULL,
+    modalidad TEXT NOT NULL CHECK (modalidad IN ('Road', 'MTB', 'Gravel')),
+    descripcion TEXT,
+    marca TEXT,
+    modelo TEXT,
+    fechaInsercion Date NOT NULL,
+    distanciaLimite integer,
+    tiempoLimite integer,
+    activo BOOLEAN DEFAULT True,
+    mesesLimite integer,
+    otros TEXT
+)"""
+
+
+def modalidadDeUsuario(conexion, usuario):
+    """Modalidad de la bici del usuario ('Road', 'MTB' o 'Gravel'); Road si no tiene vehículo."""
+    try:
+        return tipoBici(vehiculoDeUsuario(conexion, usuario)) if usuario else "Road"
+    except sqlite3.Error:
+        return "Road"
+
+
+# Columnas de texto opcionales añadidas después: modelo del componente y otros (p. ej. velocidades de la cadena)
+COLUMNAS_OPCIONALES_COMPONENTES = ("modelo", "otros")
+
+
 def asegurarColumnasArchivosComponentes(conexion) -> None:
-    """Añade a archivoscomponentes las columnas nuevas (mesesLimite) conservando las filas."""
-    columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(archivoscomponentes)")}
-    if columnas and "mesesLimite" not in columnas:
+    """Pone al día archivoscomponentes conservando las filas: añade mesesLimite y la columna obligatoria
+    modalidad (tras elemento). Como SQLite no añade columnas NOT NULL sin valor por defecto ni en medio de
+    la tabla, se rehace la tabla manteniendo los id; las filas existentes reciben la modalidad de la bici
+    de su usuario."""
+    columnas = [fila[1] for fila in conexion.execute("PRAGMA table_info(archivoscomponentes)")]
+    if not columnas:
+        return
+    if "mesesLimite" not in columnas:
         logging.info("Migrando archivoscomponentes: se añade la columna mesesLimite")
         conexion.execute("ALTER TABLE archivoscomponentes ADD COLUMN mesesLimite integer")
         conexion.commit()
+        columnas.append("mesesLimite")
+    if "modalidad" in columnas:
+        for columna in COLUMNAS_OPCIONALES_COMPONENTES:
+            if columna not in columnas:
+                logging.info("Migrando archivoscomponentes: se añade la columna %s", columna)
+                conexion.execute(f"ALTER TABLE archivoscomponentes ADD COLUMN {columna} TEXT")
+                conexion.commit()
+        return
+    logging.info("Migrando archivoscomponentes: se añade la columna obligatoria modalidad")
+    filas = conexion.execute(f"SELECT {', '.join(columnas)} FROM archivoscomponentes").fetchall()
+    modalidades = {}
+    for fila in filas:
+        usuario = fila[columnas.index("usuario")]
+        if usuario not in modalidades:
+            modalidades[usuario] = modalidadDeUsuario(conexion, usuario)
+    try:
+        conexion.execute(SQL_CREAR_ARCHIVOS_COMPONENTES.replace(
+            "archivoscomponentes (", "archivoscomponentes_nueva (", 1))
+        conexion.executemany(
+            f"INSERT INTO archivoscomponentes_nueva ({', '.join(columnas)}, modalidad) "
+            f"VALUES ({', '.join('?' for _ in columnas)}, ?)",
+            [(*fila, modalidades[fila[columnas.index("usuario")]]) for fila in filas])
+        conexion.execute("DROP TABLE archivoscomponentes")
+        conexion.execute("ALTER TABLE archivoscomponentes_nueva RENAME TO archivoscomponentes")
+        conexion.commit()
+    except sqlite3.Error:
+        conexion.rollback()
+        raise
+    logging.info("archivoscomponentes migrada: %d filas con modalidad %s", len(filas), modalidades)
 
 
 def usuariosConNombre(conexion):
@@ -310,26 +381,29 @@ def crearComponentesPorDefecto(conexion, usuario=None) -> int:
     creados = 0
     try:
         for nombre_usuario in usuarios:
+            modalidad = modalidadDeUsuario(conexion, nombre_usuario)   # la de su bici
             faltan = [fila[0] for fila in conexion.execute(
                 """SELECT MIN(c.nombre) FROM Componente c
                    WHERE trim(COALESCE(c.nombre, '')) <> ''
                      AND NOT EXISTS (SELECT 1 FROM archivoscomponentes ac
-                                     WHERE ac.usuario = ? AND lower(ac.elemento) = lower(c.nombre))
-                   GROUP BY lower(c.nombre)""", (nombre_usuario,))]
+                                     WHERE ac.usuario = ? AND lower(ac.elemento) = lower(c.nombre)
+                                       AND ac.modalidad = ?)
+                   GROUP BY lower(c.nombre)""", (nombre_usuario, modalidad))]
             conexion.executemany(
-                """INSERT INTO archivoscomponentes (usuario, elemento, descripcion, fechaInsercion,
-                       distanciaLimite, tiempoLimite, mesesLimite, activo) VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
-                [(nombre_usuario, nombre, DESCRIPCION_POR_DEFECTO, FECHA_ALTA_POR_DEFECTO.isoformat(),
-                  *limitesComponente(conexion, nombre, nombre_usuario)) for nombre in faltan],
+                """INSERT INTO archivoscomponentes (usuario, elemento, modalidad, descripcion, fechaInsercion,
+                       distanciaLimite, tiempoLimite, mesesLimite, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                [(nombre_usuario, nombre, modalidad, DESCRIPCION_POR_DEFECTO, FECHA_ALTA_POR_DEFECTO.isoformat(),
+                  *limitesComponente(conexion, nombre, nombre_usuario, modalidad)) for nombre in faltan],
             )
             creados += len(faltan)
             # Los POR DEFECTO aún no los ha definido el usuario: se les ponen los límites por defecto actuales
             existentes = conexion.execute(
-                "SELECT id, elemento FROM archivoscomponentes WHERE usuario = ? AND descripcion = ?",
+                "SELECT id, elemento, modalidad FROM archivoscomponentes WHERE usuario = ? AND descripcion = ?",
                 (nombre_usuario, DESCRIPCION_POR_DEFECTO)).fetchall()
             conexion.executemany(
                 "UPDATE archivoscomponentes SET distanciaLimite = ?, tiempoLimite = ?, mesesLimite = ? WHERE id = ?",
-                [(*limitesComponente(conexion, elemento, nombre_usuario), id_) for id_, elemento in existentes],
+                [(*limitesComponente(conexion, elemento, nombre_usuario, mod), id_)
+                 for id_, elemento, mod in existentes],
             )
         conexion.commit()
     except sqlite3.Error:
@@ -374,7 +448,7 @@ def calcularKmComponentes(conexion, usuario=None) -> int:
 SQL_COMPONENTES_ESTADISTICAS = """
 WITH del_usuario AS (
     SELECT ac.*, ROW_NUMBER() OVER (
-               PARTITION BY lower(ac.elemento)
+               PARTITION BY lower(ac.elemento), {modalidad_ac}
                ORDER BY ac.activo DESC, ac.fechaInsercion DESC, ac.id DESC) AS orden
     FROM archivoscomponentes ac
     WHERE ac.usuario = ?
@@ -394,6 +468,7 @@ SELECT COALESCE(u.elemento, c.nombre), u.descripcion, u.fechaInsercion, u.distan
          + (CAST(strftime('%m', 'now', 'localtime') AS INTEGER) - CAST(strftime('%m', u.fechaInsercion) AS INTEGER))
          - (CAST(strftime('%d', 'now', 'localtime') AS INTEGER) < CAST(strftime('%d', u.fechaInsercion) AS INTEGER))
        END,
+       {modalidad_u},
        u.activo
 FROM catalogo c
 LEFT JOIN ultimo u ON lower(u.elemento) = lower(c.nombre)
@@ -553,7 +628,7 @@ class BaseDatos:
             self.cursor.execute("""CREATE TABLE IF NOT EXISTS EntradasUsers (id integer PRIMARY KEY,  fecha Date,  nombre text NOT NULL,  usuario text,  tipov integer NOT NULL, descripcion  TEXT NOT NULL, FOREIGN KEY (tipov) REFERENCES tipo_vehiculo(id))""")
             self.cursor.execute("""CREATE TABLE IF NOT EXISTS linked_elements (id integer PRIMARY KEY, fecha Date, Entrada_num integer, num_elemento, FOREIGN KEY (Entrada_num) REFERENCES EntradasUsers(id), FOREIGN KEY (num_Elemento) REFERENCES Componente(id))""")
             self.cursor.execute("""CREATE TABLE IF NOT EXISTS tipo_vehiculo (id	INTEGER PRIMARY KEY,vehiculo TEXT)""")
-            self.cursor.execute("""CREATE TABLE IF NOT EXISTS archivoscomponentes (id INTEGER PRIMARY KEY, usuario NOT NULL, elemento TEXT NOT NULL, descripcion TEXT, marca TEXT, fechaInsercion Date NOT NULL, distanciaLimite integer, tiempoLimite integer, activo BOOLEAN DEFAULT True, mesesLimite integer)""")
+            self.cursor.execute(SQL_CREAR_ARCHIVOS_COMPONENTES)
         except sqlite3.Error as error:
             logging.error("Error al crear Tablas en SQLite: %s", error)
             logging.error("Tablas ya existen en SQLite")
@@ -745,30 +820,41 @@ class BaseDatos:
         return True
 
     # -------- Componentes del usuario --------
-    def limitesComponente(self, componente, usuario=None):
-        """(km, horas, meses) por defecto del componente para la bici del usuario."""
-        return limitesComponente(self.conexion, componente, usuario)
+    def limitesComponente(self, componente, usuario=None, modalidad=None):
+        """(km, horas, meses) por defecto del componente para esa modalidad (o la de la bici del usuario)."""
+        return limitesComponente(self.conexion, componente, usuario, modalidad)
 
-    def guardarComponente(self, fecha, usuario, elemento, descripcion, marca, distancia, tiempo, meses) -> bool:
-        """Alta de componente. Si existía POR DEFECTO se le ponen estos datos en vez de duplicarlo."""
+    def modalidadDeUsuario(self, usuario):
+        return modalidadDeUsuario(self.conexion, usuario)
+
+    def guardarComponente(self, fecha, usuario, elemento, descripcion, marca, distancia, tiempo, meses,
+                          modalidad, otros=None, modelo=None) -> bool:
+        """Alta de componente en una modalidad (Road/MTB/Gravel, obligatoria). Si existía POR DEFECTO para esa
+        misma modalidad se le ponen estos datos en vez de duplicarlo. `otros`: dato extra del componente
+        (las velocidades de la cadena: '6v' ... '13v')."""
+        if modalidad not in MODALIDADES_ESTADISTICAS:
+            logging.error("Alta de componente %s sin modalidad válida: %r", elemento, modalidad)
+            return False
         try:
             asegurarColumnasArchivosComponentes(self.conexion)
             por_defecto = self.conexion.execute(
                 "SELECT id FROM archivoscomponentes WHERE usuario = ? AND lower(elemento) = lower(?) "
-                "AND descripcion = ? ORDER BY id LIMIT 1",
-                (usuario, elemento, DESCRIPCION_POR_DEFECTO),
+                "AND modalidad = ? AND descripcion = ? ORDER BY id LIMIT 1",
+                (usuario, elemento, modalidad, DESCRIPCION_POR_DEFECTO),
             ).fetchone()
             if por_defecto:
                 self.conexion.execute(
                     "UPDATE archivoscomponentes SET fechaInsercion = ?, elemento = ?, descripcion = ?, marca = ?, "
-                    "distanciaLimite = ?, tiempoLimite = ?, mesesLimite = ?, activo = True WHERE id = ?",
-                    (fecha, elemento, descripcion, marca, distancia, tiempo, meses, por_defecto[0])
+                    "modelo = ?, distanciaLimite = ?, tiempoLimite = ?, mesesLimite = ?, otros = ?, activo = True "
+                    "WHERE id = ?",
+                    (fecha, elemento, descripcion, marca, modelo, distancia, tiempo, meses, otros, por_defecto[0])
                 )
             else:
                 self.conexion.execute(
-                    "INSERT INTO archivoscomponentes (fechaInsercion, usuario, elemento, descripcion, marca, "
-                    "distanciaLimite, tiempoLimite, mesesLimite) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (fecha, usuario, elemento, descripcion, marca, distancia, tiempo, meses)
+                    "INSERT INTO archivoscomponentes (fechaInsercion, usuario, elemento, modalidad, descripcion, "
+                    "marca, modelo, distanciaLimite, tiempoLimite, mesesLimite, otros) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (fecha, usuario, elemento, modalidad, descripcion, marca, modelo, distancia, tiempo, meses, otros)
                 )
             self.conexion.commit()
         except sqlite3.Error as error:
@@ -837,15 +923,18 @@ class BaseDatos:
             self.calcularKmComponentes(usuario)   # km al día con las actividades y altas actuales
         try:
             columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(archivoscomponentes)")}
+            con_modalidad = "modalidad" in columnas     # sin ella (migración pendiente) sale vacía
             sql = SQL_COMPONENTES_ESTADISTICAS.format(
-                meses_limite="u.mesesLimite" if "mesesLimite" in columnas else "NULL")
+                meses_limite="u.mesesLimite" if "mesesLimite" in columnas else "NULL",
+                modalidad_ac="ac.modalidad" if con_modalidad else "NULL",
+                modalidad_u="u.modalidad" if con_modalidad else "NULL")
             filas = conexion.execute(sql, (usuario,)).fetchall()
         except sqlite3.Error as error:
             logging.error("Error al leer los datos de los componentes; se muestran solo los nombres: %s", error)
             vacias = (None,) * (NUM_COLUMNAS_ESTADISTICAS - 1)
             filas = [(nombre, *vacias) for (nombre,) in conexion.execute(
                 "SELECT DISTINCT nombre FROM Componente WHERE trim(COALESCE(nombre, '')) <> ''")]
-        return sorted(filas, key=lambda fila: orden_alfabetico(fila[0]))
+        return sorted(filas, key=lambda fila: (orden_alfabetico(fila[0]), fila[-2] or ""))
 
     def bicicletasDeUsuario(self, usuario):
         """[(id, marca, modelo, modalidad, anio, activa)] de las bicis del usuario: primero las activas."""

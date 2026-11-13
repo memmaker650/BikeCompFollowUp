@@ -79,7 +79,7 @@ def test_tipos_limite_usados_y_elementos_de_usuario(bd):
     assert bd.insertarLimiteAlerta("superior", 200, "Plato") is True       # ya existe: no se duplica
     assert bd.seleccionarLimitesComponente("Plato") == [("Plato", "superior", 100)]
     assert bd.tiposLimiteUsados() == ["superior"]
-    bd.guardarComponente("2026-01-01", "u", "Plato", "", "", 5000, 500, None)
+    bd.guardarComponente("2026-01-01", "u", "Plato", "", "", 5000, 500, None, "Road")
     assert bd.elementosDeUsuario("u") == ["Plato"]
 
 
@@ -87,7 +87,7 @@ def test_tipos_limite_usados_y_elementos_de_usuario(bd):
 
 def test_guardar_componente_actualiza_el_por_defecto(bd):
     DB_Operations.crearComponentesPorDefecto(bd.conexion, "u")
-    assert bd.guardarComponente("2026-06-01", "u", "Plato", "Plato 50", "SRAM", 5000, 500, None) is True
+    assert bd.guardarComponente("2026-06-01", "u", "Plato", "Plato 50", "SRAM", 5000, 500, None, "Road") is True
     filas = bd.conexion.execute("SELECT descripcion, marca FROM archivoscomponentes WHERE usuario = 'u' "
                                 "AND elemento = 'Plato'").fetchall()
     assert filas == [("Plato 50", "SRAM")]
@@ -99,7 +99,7 @@ def test_errores_de_escritura_devuelven_false(bd):
     bd.conexion.execute("DROP TABLE archivoscomponentes")
     bd.conexion.execute("DROP TABLE LimitesAlerta")
     bd.conexion.execute("DROP TABLE EntradasUsers")
-    assert bd.guardarComponente("2026-01-01", "u", "Plato", "", "", 1, 1, None) is False
+    assert bd.guardarComponente("2026-01-01", "u", "Plato", "", "", 1, 1, None, "Road") is False
     assert bd.desactivarComponente("Plato", "u") is False
     assert bd.insertarLimiteAlerta("superior", 1, "Plato") is False
     assert bd.insertarEntrada("2026-01-01", "x", "x", "x", "x") is False

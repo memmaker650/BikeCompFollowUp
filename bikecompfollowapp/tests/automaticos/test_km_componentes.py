@@ -33,19 +33,21 @@ def con_catalogo(app):
     return app.sqliteConnection
 
 
-def alta(con, elemento, fecha="2026-03-01", usuario=USUARIO, activo=1):
+def alta(con, elemento, fecha="2026-03-01", usuario=USUARIO, activo=1, modalidad="Road"):
     cursor = con.execute(
-        "INSERT INTO archivoscomponentes (usuario, elemento, fechaInsercion, activo) VALUES (?, ?, ?, ?)",
-        (usuario, elemento, fecha, activo),
+        "INSERT INTO archivoscomponentes (usuario, elemento, modalidad, fechaInsercion, activo) VALUES (?, ?, ?, ?, ?)",
+        (usuario, elemento, modalidad, fecha, activo),
     )
     con.commit()
     return cursor.lastrowid
 
 
-def actividad(con, strava_id, km, fecha, tipo="Ride", usuario=USUARIO, horas=None):
+def actividad(con, strava_id, km, fecha, tipo="Ride", usuario=USUARIO, horas=None, modalidad="Road"):
+    """Por defecto, salida de carretera (Modalidad Road); las que no son Ride no tienen modalidad."""
     con.execute(
-        "INSERT INTO ActividadesStrava (StravaID, tipo, distancia, duracion, user, fecha) VALUES (?, ?, ?, ?, ?, ?)",
-        (strava_id, tipo, km, horas, usuario, fecha),
+        "INSERT INTO ActividadesStrava (StravaID, tipo, Modalidad, distancia, duracion, user, fecha) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (strava_id, tipo, modalidad if tipo == "Ride" else None, km, horas, usuario, fecha),
     )
     con.commit()
 
@@ -309,8 +311,8 @@ def test_por_defecto_existentes_reciben_los_limites_actuales(con_catalogo):
     alta(con_catalogo, "Plato")                                         # definido por el usuario: no se toca
     con_catalogo.execute("UPDATE archivoscomponentes SET distanciaLimite = 9999")
     con_catalogo.execute(
-        "INSERT INTO archivoscomponentes (usuario, elemento, descripcion, fechaInsercion, distanciaLimite, tiempoLimite) "
-        "VALUES (?, 'Cubierta', ?, '2026-01-01', 5000, 500)", (USUARIO, DESCRIPCION_POR_DEFECTO))
+        "INSERT INTO archivoscomponentes (usuario, elemento, modalidad, descripcion, fechaInsercion, distanciaLimite, "
+        "tiempoLimite) VALUES (?, 'Cubierta', 'Road', ?, '2026-01-01', 5000, 500)", (USUARIO, DESCRIPCION_POR_DEFECTO))
     crearComponentesPorDefecto(con_catalogo, USUARIO)
     limites = {f[0]: f[1:] for f in con_catalogo.execute(
         "SELECT elemento, distanciaLimite, tiempoLimite, mesesLimite FROM archivoscomponentes")}

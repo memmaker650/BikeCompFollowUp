@@ -60,6 +60,22 @@ def ir_a_cuadricula(ui, mecanico="MECÁNICO HOY", modalidad="ROAD"):
     return pulsar(ui, "Continuar ▶")
 
 
+NO_CUADRICULA = {"◀ Volver", "Confirmar Cambios", "Añadir detalles Componentes Cambiados"}
+
+
+def botones_cuadricula(raiz):
+    """Botones de componentes de una cuadrícula de mantenimiento (sin Volver ni los de confirmar/detalles)."""
+    return [b for b in widgets(raiz, toga.Button) if b.text not in NO_CUADRICULA]
+
+
+def abrir_detalles(ui, *ruta):
+    """En la cuadrícula: pulsa los botones de `ruta` (subpantallas y componentes cambiados) y abre la
+    pantalla de detalles del primero."""
+    for texto in ruta:
+        pulsar(ui, texto)
+    return pulsar(ui, "Añadir detalles Componentes Cambiados")
+
+
 def textos_labels(raiz):
     return [label.text for label in widgets(raiz, toga.Label)]
 
@@ -141,7 +157,7 @@ def test_menu_volver_a_inicial(en_menu):
 def test_estadisticas_abre_tabla_componentes(en_menu):
     pantalla = pulsar(en_menu, "Estadísticas")
     assert en_menu.tabla in widgets(pantalla)
-    assert {"+ Componente", "+ Límite Alerta"} <= set(textos_botones(pantalla))
+    assert {"Cambio Mecánico", "+ Límite Alerta"} <= set(textos_botones(pantalla))
 
 
 def test_estadisticas_volver_a_menu(en_menu):
@@ -165,7 +181,7 @@ def test_mantenimiento_muestra_cuadricula(en_menu):
     pantalla = ir_a_cuadricula(en_menu)
     filas = PANTALLAS_MANTENIMIENTO[PANTALLA_MANTENIMIENTO][1]
     esperados = [t(clave) for fila in filas for clave in fila]
-    assert [texto for texto in textos_botones(pantalla) if texto != "◀ Volver"] == esperados
+    assert [b.text for b in botones_cuadricula(pantalla)] == esperados
 
 
 @pytest.mark.parametrize("ruta, clave", [
@@ -181,7 +197,7 @@ def test_navegacion_subpantallas(en_menu, ruta, clave):
 
     titulo, filas, _ = PANTALLAS_MANTENIMIENTO[clave]
     assert t(titulo) in textos_labels(pantalla)
-    botones = [b for b in widgets(pantalla, toga.Button) if b.text != "◀ Volver"]
+    botones = botones_cuadricula(pantalla)
     assert [b.text for b in botones] == [t(c) for fila in filas for c in fila], "Se pintan todas las filas"
     assert all(b.style.height == modulo_app.ALTO_BOTON_GRANDE for b in botones)
 
@@ -199,7 +215,7 @@ def test_volver_recorre_las_subpantallas_hasta_el_menu(en_menu):
 
 def test_componente_abre_alta_con_elemento_preseleccionado(en_menu):
     ir_a_cuadricula(en_menu)
-    pantalla = pulsar(en_menu, "Cadena")
+    pantalla = abrir_detalles(en_menu, "Cadena")
 
     assert "Añadir Componente" in textos_labels(pantalla)
     assert f"Añadir Componente: {USUARIO}" not in textos_labels(pantalla)
@@ -210,31 +226,65 @@ def test_componente_abre_alta_con_elemento_preseleccionado(en_menu):
 
 def test_componente_que_no_esta_en_bd_se_anade_al_desplegable(en_menu):
     ir_a_cuadricula(en_menu)
-    pulsar(en_menu, "Otros")
-    pulsar(en_menu, "HORQUILLA")
+    abrir_detalles(en_menu, "Otros", "HORQUILLA")
     assert en_menu.selection_elemento.value == "HORQUILLA"
 
 
-def test_alta_desde_mantenimiento_guarda_y_vuelve_a_la_cuadricula(en_menu, db):
+def test_detalles_desde_mantenimiento_se_guardan_al_confirmar_y_vuelve_al_menu(en_menu, db):
     ir_a_cuadricula(en_menu)
-    pulsar(en_menu, "Otros")
-    pulsar(en_menu, "Otros")
-    pulsar(en_menu, "PEDALIER")
+    abrir_detalles(en_menu, "Otros", "Otros", "PEDALIER")
     en_menu.marca_texto.value = "Shimano"
-    pulsar(en_menu, "Cargar")
+    pulsar(en_menu, "Ver resumen ▶")
+    assert db.execute("SELECT count(*) FROM archivoscomponentes").fetchone() == (0,), "Aún no se guarda"
+    pantalla = pulsar(en_menu, "Confirmar")
 
     assert db.execute("SELECT usuario, elemento, marca FROM archivoscomponentes").fetchall() == [
         (USUARIO, "PEDALIER", "Shimano")
     ]
-    pantalla = pulsar(en_menu, "◀ Volver")
-    assert "Otros componentes" in textos_labels(pantalla)
+    assert "Estadísticas" in textos_botones(pantalla)
 
 
-def test_mas_componente_desde_estadisticas_vuelve_a_estadisticas(en_menu):
+def test_cambio_mecanico_abre_mantenimiento(en_menu):
     pulsar(en_menu, "Estadísticas")
-    pulsar(en_menu, "+ Componente")
+    pantalla = pulsar(en_menu, "Cambio Mecánico")
+    assert "MANTENIMIENTO / PASO POR TALLER" in textos_labels(pantalla)
+    assert {"MECÁNICO HOY", "MECÁNICO EN FECHA", "ROAD", "MTB", "GRAVEL"} <= set(textos_botones(pantalla))
+
+
+def test_cambio_mecanico_volver_regresa_a_estadisticas(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    pulsar(en_menu, "Cambio Mecánico")
     pantalla = pulsar(en_menu, "◀ Volver")
     assert en_menu.tabla in widgets(pantalla)
+
+
+def test_cambio_mecanico_lleva_a_la_cuadricula_y_su_volver_a_mantenimiento(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    pulsar(en_menu, "Cambio Mecánico")
+    pulsar(en_menu, "MECÁNICO HOY")
+    pulsar(en_menu, "ROAD")
+    pulsar(en_menu, "Continuar ▶")
+    pantalla = pulsar(en_menu, "◀ Volver")         # cuadrícula -> Mantenimiento
+    assert "MANTENIMIENTO / PASO POR TALLER" in textos_labels(pantalla)
+    pantalla = pulsar(en_menu, "◀ Volver")         # Mantenimiento -> Estadísticas (de donde se vino)
+    assert en_menu.tabla in widgets(pantalla)
+
+
+def test_mantenimiento_desde_el_menu_vuelve_al_menu(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    pulsar(en_menu, "Cambio Mecánico")
+    pulsar(en_menu, "◀ Volver")
+    pulsar(en_menu, "◀ Volver")                    # Estadísticas -> menú
+    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    pantalla = pulsar(en_menu, "◀ Volver")
+    assert "Estadísticas" in textos_botones(pantalla)
+
+
+def test_titulo_mantenimiento_en_mayusculas_y_2_puntos_mas(en_menu):
+    from bikecompfollowapp.app import TAMANO_TITULO_MANTENIMIENTO
+    pantalla = pulsar(en_menu, "Mantenimiento / Paso por taller")
+    titulo = [w for w in widgets(pantalla, toga.Label) if w.text == "MANTENIMIENTO / PASO POR TALLER"]
+    assert len(titulo) == 1 and titulo[0].style.font_size == TAMANO_TITULO_MANTENIMIENTO == 18
 
 
 def test_limite_alerta_desde_estadisticas(en_menu, db):
@@ -269,11 +319,11 @@ def test_definicion_subpantallas_coherente():
 
 # ---- Estadísticas: tabla 1 con todos los componentes ----
 
-def _alta(db, elemento, fecha="2026-04-01", activo=1, usuario=USUARIO, descripcion="desc"):
+def _alta(db, elemento, fecha="2026-04-01", activo=1, usuario=USUARIO, descripcion="desc", modalidad="Road"):
     db.execute(
-        "INSERT INTO archivoscomponentes (usuario, elemento, descripcion, fechaInsercion, distanciaLimite, "
-        "tiempoLimite, activo) VALUES (?, ?, ?, ?, 5000, 500, ?)",
-        (usuario, elemento, descripcion, fecha, activo),
+        "INSERT INTO archivoscomponentes (usuario, elemento, modalidad, descripcion, fechaInsercion, distanciaLimite, "
+        "tiempoLimite, activo) VALUES (?, ?, ?, ?, ?, 5000, 500, ?)",
+        (usuario, elemento, modalidad, descripcion, fecha, activo),
     )
     db.connection.commit()
 
@@ -323,14 +373,37 @@ def test_estadisticas_orden_alfabetico_ignora_acentos(en_menu):
     assert nombres[0] == "cadena"
 
 
-def test_estadisticas_columna_activo_si_no(en_menu, db):
+def test_estadisticas_columna_activo_con_iconos(en_menu, db):
     _alta(db, "Plato", activo=1)
     _alta(db, "HORQUILLA", activo=0)
     pulsar(en_menu, "Estadísticas")
     filas = {f.elemento: f.activo for f in en_menu.tabla.data}
-    assert filas["Plato"] == "Sí"
-    assert filas["HORQUILLA"] == "No"
-    assert set(filas.values()) == {"Sí", "No"}
+    assert filas["Plato"] == "✅"
+    assert filas["HORQUILLA"] == "❌"
+    assert set(filas.values()) == {"✅", "❌"}, "Ni 'Sí' ni 'No'"
+
+
+@pytest.mark.parametrize("valor, icono", [
+    (1, "✅"), (0, "❌"), (True, "✅"), (False, "❌"), ("1", "✅"), ("0", "❌"), ("False", "❌"), (None, ""), ("", ""),
+])
+def test_icono_activo(valor, icono):
+    assert modulo_app.icono_activo(valor) == icono
+
+
+def test_iconos_iguales_en_todos_los_idiomas(en_menu, db):
+    _alta(db, "Plato", activo=0)
+    translations.set_language("fr")
+    en_menu.construir_pantalla_tres(USUARIO)
+    assert {f.elemento: f.activo for f in en_menu.tabla.data}["Plato"] == "❌"
+
+
+def test_columnas_max_ocultas_pero_sus_datos_siguen_en_la_fila(en_menu, db):
+    _alta(db, "Plato")
+    pulsar(en_menu, "Estadísticas")
+    accesores = [c.accessor for c in en_menu.tabla.columns]
+    assert not {"distanciaLimite", "tiempoLimite", "mesesLimite"} & set(accesores)
+    plato = [f for f in en_menu.tabla.data if f.elemento == "Plato"][0]
+    assert (plato.distanciaLimite, plato.tiempoLimite) == (5000, 500)
 
 
 @pytest.mark.parametrize("valor, texto", [
@@ -351,15 +424,15 @@ def test_texto_activo_traducido():
 def test_estadisticas_cabeceras_horas(en_menu):
     pulsar(en_menu, "Estadísticas")
     assert [c.heading for c in en_menu.tabla.columns] == [
-        "Componente", "Descripción", "Fecha", "Km máx", "Km desde alta", "Horas máx", "Horas desde alta",
-        "Meses máx", "Meses desde alta", "Activo"]
+        "Componente", "Modalidad", "Descripción", "Fecha", "Km uso", "H uso", "Meses uso", "Activo"]
+    assert not {"Km máx", "Horas máx", "Meses máx"} & {c.heading for c in en_menu.tabla.columns}
     assert "Tiempo" not in [c.heading for c in en_menu.tabla.columns]
 
 
 def test_estadisticas_columna_horas_desde_alta(en_menu, db):
     _alta(db, "Plato")
-    db.execute("INSERT INTO ActividadesStrava (StravaID, tipo, distancia, duracion, user, fecha) "
-               "VALUES (1, 'Ride', 40, 1.5, ?, '2026-04-02')", (USUARIO,))
+    db.execute("INSERT INTO ActividadesStrava (StravaID, tipo, Modalidad, distancia, duracion, user, fecha) "
+               "VALUES (1, 'Ride', 'Road', 40, 1.5, ?, '2026-04-02')", (USUARIO,))
     db.connection.commit()
     pulsar(en_menu, "Estadísticas")
     plato = [f for f in en_menu.tabla.data if f.elemento == "Plato"][0]
@@ -367,17 +440,18 @@ def test_estadisticas_columna_horas_desde_alta(en_menu, db):
 
 
 def test_alta_componente_etiqueta_horas_limite(en_menu):
-    pulsar(en_menu, "Estadísticas")
-    pantalla = pulsar(en_menu, "+ Componente")
+    ir_a_cuadricula(en_menu)
+    pantalla = abrir_detalles(en_menu, "Cadena")
     assert "Horas Límite: " in textos_labels(pantalla)
 
 
 def test_alta_componente_usuario_en_la_linea_siguiente_en_azul(en_menu):
     ir_a_cuadricula(en_menu)
-    pantalla = pulsar(en_menu, "Cadena")
-    labels = textos_labels(pantalla)
-    titulo = labels.index("Añadir Componente")
-    assert labels[titulo + 1:titulo + 3] == ["Usuario: ", USUARIO]
+    abrir_detalles(en_menu, "Cadena")
+    formulario = en_menu.label_pantalla_dos.parent
+    i = formulario.children.index(en_menu.label_pantalla_dos)
+    assert en_menu.label_pantalla_dos.text == "Añadir Componente"
+    assert [w.text for w in formulario.children[i + 1].children] == ["Usuario: ", USUARIO]
 
     etiqueta, usuario = en_menu.label_usuario_componente, en_menu.label_usuario_seleccionado
     assert etiqueta.parent is usuario.parent and etiqueta.parent.style.direction == "row"
@@ -388,8 +462,9 @@ def test_alta_componente_usuario_en_la_linea_siguiente_en_azul(en_menu):
 
 def test_alta_componente_usuario_traducido(en_menu):
     translations.set_language("fr")
-    pantalla = en_menu.construir_pantalla_cinco(USUARIO)
-    assert ["Ajouter un composant", "Utilisateur : ", USUARIO] == textos_labels(pantalla)[:3]
+    en_menu.construir_pantalla_cinco(USUARIO)
+    assert en_menu.label_pantalla_dos.text == "Ajouter un composant"
+    assert (en_menu.label_usuario_componente.text, en_menu.label_usuario_seleccionado.text) == ("Utilisateur : ", USUARIO)
 
 
 # ---- Límites por defecto en la pantalla de alta de componente ----
@@ -419,8 +494,7 @@ def test_alta_rellena_limites_por_defecto(en_menu, componente, esperado):
 ])
 def test_alta_desde_mantenimiento_trae_sus_limites(en_menu, ruta, esperado):
     ir_a_cuadricula(en_menu)
-    for texto in ruta:
-        pulsar(en_menu, texto)
+    abrir_detalles(en_menu, *ruta)
     assert limites_en_pantalla(en_menu) == esperado
 
 
@@ -573,7 +647,7 @@ def test_tabla_modalidad_cabeceras_y_filas(en_menu, monkeypatch):
     monkeypatch.setattr(dbops, "date", type("D", (), {"today": staticmethod(lambda: __import__("datetime").date(2026, 11, 5))}))
     pulsar(en_menu, "Estadísticas")
     assert cabeceras(en_menu.tablaModalidad) == [
-        "Modalidad", "Desde", "2024 KMs", "2024 Horas", "2025 KMs", "2025 Horas", "2026 KMs", "2026 Horas"]
+        "Modalidad", "Desde", "2024 KMs", "2024 H", "2025 KMs", "2025 H", "2026 KMs", "2026 H"]
     assert [f[0] for f in filas_texto(en_menu.tablaModalidad)] == ["Road", "MTB", "Gravel"]
 
 
@@ -642,7 +716,7 @@ def test_advertencia_traducida(en_menu, dialogos):
     en_menu.ir_a_pantalla_tres(None, USUARIO)
     aviso = [d for d in dialogos if d.label_titulo.text == "Warning !!!"][0]
     assert aviso.label_mensaje.text.splitlines()[0].startswith("No data for year ")
-    assert cabeceras(en_menu.tablaModalidad)[2:4] == [f"{date.today().year - 2} Km", f"{date.today().year - 2} Hours"]
+    assert cabeceras(en_menu.tablaModalidad)[2:4] == [f"{date.today().year - 2} Km", f"{date.today().year - 2} H"]
 
 
 @pytest.mark.parametrize("valor, texto", [(None, ""), (0.0, "0"), (12.0, "12"), (1959.45, "1959.5"), (2.24, "2.2")])
@@ -703,7 +777,7 @@ def test_con_los_dos_elegidos_continua_a_la_cuadricula(preparacion, mecanico, mo
     assert preparacion.boton_continuar_mantenimiento.enabled is True
     pantalla = pulsar(preparacion, "Continuar ▶")
     filas = PANTALLAS_MANTENIMIENTO[PANTALLA_MANTENIMIENTO][1]
-    assert [x for x in textos_botones(pantalla) if x != "◀ Volver"] == [t(c) for fila in filas for c in fila]
+    assert [b.text for b in botones_cuadricula(pantalla)] == [t(c) for fila in filas for c in fila]
     assert preparacion.modalidad_mantenimiento == {"ROAD": "Road", "MTB": "MTB", "GRAVEL": "Gravel"}[modalidad]
 
 
@@ -733,7 +807,7 @@ def test_fecha_elegida_pasa_al_alta_del_componente(preparacion):
     pulsar(preparacion, "GRAVEL")
     pantalla = pulsar(preparacion, "Continuar ▶")
     assert "GRAVEL · mecánico el 2026-03-14" in textos_labels(pantalla)
-    pulsar(preparacion, "Cadena")
+    abrir_detalles(preparacion, "Cadena")
     assert preparacion.entrada_fecha.value == "2026-03-14"
 
 
@@ -741,7 +815,7 @@ def test_mecanico_hoy_usa_la_fecha_de_hoy_en_el_alta(preparacion):
     pulsar(preparacion, "MECÁNICO HOY")
     pulsar(preparacion, "ROAD")
     pulsar(preparacion, "Continuar ▶")
-    pulsar(preparacion, "Cadena")
+    abrir_detalles(preparacion, "Cadena")
     assert preparacion.entrada_fecha.value == date.today().isoformat()
 
 
@@ -791,7 +865,237 @@ def test_botones_de_componentes_con_el_formato_de_la_pantalla_previa(en_menu, ru
     pantalla = pulsar(en_menu, "Continuar ▶")
     for texto in ruta:
         pantalla = pulsar(en_menu, texto)
-    botones = [b for b in widgets(pantalla, toga.Button) if b.text != "◀ Volver"]
+    botones = botones_cuadricula(pantalla)
     for b in botones:
         assert (b.style.height, b.style.font_size, b.style.font_weight, b.style.flex) == (
             previa.height, previa.font_size, previa.font_weight, previa.flex), b.text
+
+
+
+def test_ninguna_tabla_de_estadisticas_dice_horas(en_menu):
+    for idioma, palabra in (("es", "Horas"), ("en", "Hours"), ("fr", "Heures")):
+        translations.set_language(idioma)
+        en_menu.construir_pantalla_tres(USUARIO)
+        cabeceras_todas = [c.heading for tabla in (en_menu.tabla, en_menu.tablaModalidad, en_menu.tablaBicis,
+                                                   en_menu.tablaLimites) for c in tabla.columns]
+        assert not [c for c in cabeceras_todas if palabra.lower() in c.lower()], (idioma, cabeceras_todas)
+        assert any(c.split()[-1] == "H" or c.startswith("H ") for c in cabeceras_todas), idioma
+
+
+
+@pytest.mark.parametrize("idioma, cabeceras_uso", [
+    ("es", ["Km uso", "H uso", "Meses uso"]), ("en", ["Km used", "H used", "Months used"]),
+    ("fr", ["Km usage", "H usage", "Mois usage"]),
+])
+def test_columnas_de_uso_sin_desde_alta(en_menu, idioma, cabeceras_uso):
+    translations.set_language(idioma)
+    en_menu.construir_pantalla_tres(USUARIO)
+    cabeceras_tabla = [c.heading for c in en_menu.tabla.columns]
+    assert cabeceras_tabla[4:7] == cabeceras_uso
+    assert not [c for c in cabeceras_tabla if "desde alta" in c or "since added" in c or "depuis" in c]
+
+
+# ---- Componentes cambiados: selección múltiple, detalles uno a uno y resumen ----
+
+DETALLES = "Añadir detalles Componentes Cambiados"
+
+
+@pytest.fixture
+def cuadricula(en_menu):
+    pulsar(en_menu, "Mantenimiento / Paso por taller")
+    pulsar(en_menu, "MECÁNICO EN FECHA")
+    en_menu.selector_fecha_mecanico.value = date(2026, 5, 20)
+    pulsar(en_menu, "MTB")
+    pulsar(en_menu, "Continuar ▶")
+    return en_menu
+
+
+def filas_bd(db):
+    return db.execute("SELECT elemento, modalidad, fechaInsercion, marca, modelo, otros, distanciaLimite "
+                      "FROM archivoscomponentes WHERE descripcion IS NULL ORDER BY id").fetchall()
+
+
+def test_sin_elegir_nada_los_dos_botones_estan_desactivados(cuadricula):
+    assert cuadricula.boton_confirmar_cambios.enabled is False
+    assert cuadricula.boton_anadir_detalles.enabled is False
+    assert "Pulsa los componentes que has cambiado" in textos_labels(cuadricula.main_window.content)
+
+
+def test_los_dos_botones_en_la_barra_inferior(cuadricula):
+    barra = barra_inferior(cuadricula.main_window.content)
+    assert [b.text for b in widgets(barra, toga.Button)] == ["◀ Volver", "Confirmar Cambios", DETALLES]
+
+
+def test_pulsar_componentes_los_marca_y_se_pueden_elegir_varios(cuadricula):
+    from toga.colors import Color
+    pulsar(cuadricula, "Cadena")
+    pantalla = pulsar(cuadricula, "Cubiertas")
+    elegido = Color.parse(modulo_app.COLOR_SELECCIONADO)
+    assert boton(pantalla, "Cadena").style.background_color == elegido
+    assert boton(pantalla, "Cubiertas").style.background_color == elegido
+    assert boton(pantalla, "Pastillas freno").style.background_color != elegido
+    assert cuadricula.componentes_cambiados == ["taller.cadena", "taller.cubiertas"]
+    assert "Cambiados: Cadena, Cubiertas" in textos_labels(pantalla)
+    assert cuadricula.boton_confirmar_cambios.enabled and cuadricula.boton_anadir_detalles.enabled
+
+
+def test_pulsar_otra_vez_lo_desmarca(cuadricula):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Cadena")
+    assert cuadricula.componentes_cambiados == []
+    assert cuadricula.boton_anadir_detalles.enabled is False
+
+
+def test_la_pila_se_mantiene_entre_cuadriculas(cuadricula):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Otros")
+    pantalla = pulsar(cuadricula, "HORQUILLA")
+    assert cuadricula.componentes_cambiados == ["taller.cadena", "pieza.horquilla"]
+    assert "Cambiados: Cadena, HORQUILLA" in textos_labels(pantalla)
+    assert "Otros" in textos_botones(pantalla), "Los botones de subpantalla no se marcan"
+
+
+def test_confirmar_cambios_guarda_todos_con_los_datos_por_defecto(cuadricula, db):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Cubiertas")
+    pantalla = pulsar(cuadricula, "Confirmar Cambios")
+    assert filas_bd(db) == [("cadena", "MTB", "2026-05-20", "", None, None, 2000),
+                            ("Cubiertas", "MTB", "2026-05-20", "", None, None, 4000)]
+    assert cuadricula.componentes_cambiados == []
+    assert "Estadísticas" in textos_botones(pantalla), "Vuelve al menú"
+    assert cuadricula.aviso_cambios_guardados.label_titulo.text == "Cambios guardados"
+    assert "• Cadena" in cuadricula.aviso_cambios_guardados.label_mensaje.text
+
+
+def test_detalles_uno_por_componente_con_subtitulo(cuadricula):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Cubiertas")
+    pantalla = pulsar(cuadricula, DETALLES)
+    assert cuadricula.label_subtitulo_componente.text == "CADENA  (1/2)"
+    assert cuadricula.selection_elemento.value == "cadena"
+    assert (cuadricula.entrada_fecha.value, cuadricula.selection_modalidad.value) == ("2026-05-20", "MTB")
+    assert "Siguiente ▶" in textos_botones(pantalla)
+    assert not {"Cargar", "+ Componente"} & set(textos_botones(pantalla))
+    pantalla = pulsar(cuadricula, "Siguiente ▶")
+    assert cuadricula.label_subtitulo_componente.text == "CUBIERTAS  (2/2)"
+    assert "Ver resumen ▶" in textos_botones(pantalla)
+
+
+def test_subtitulo_justo_tras_el_usuario(cuadricula):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, DETALLES)
+    hijos = cuadricula.formulario_alta.children
+    assert hijos.index(cuadricula.label_subtitulo_componente) == hijos.index(cuadricula.label_pantalla_dos) + 2
+
+
+def test_resumen_con_los_detalles_de_cada_componente(cuadricula, db):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Cubiertas")
+    pulsar(cuadricula, DETALLES)
+    cuadricula.marca_texto.value, cuadricula.modelo_texto.value = "KMC", "X12"
+    cuadricula.selection_otros.value = "12v"
+    pulsar(cuadricula, "Siguiente ▶")
+    cuadricula.marca_texto.value = "Continental"
+    cuadricula.distancialim_texto.value = "3500"
+    pantalla = pulsar(cuadricula, "Ver resumen ▶")
+    assert "Resumen de componentes cambiados" in textos_labels(pantalla)
+    filas = [(f.componente, f.marca, f.modelo, f.otros, f.km, f.fecha, f.modalidad)
+             for f in cuadricula.tablaResumenCambiados.data]
+    assert filas == [("Cadena", "KMC", "X12", "12v", "2000", "2026-05-20", "MTB"),
+                     ("Cubiertas", "Continental", "", "", "3500", "2026-05-20", "MTB")]
+    assert {"Confirmar", "Editar"} <= set(textos_botones(pantalla))
+    assert filas_bd(db) == [], "Hasta confirmar no se guarda nada"
+
+
+def test_confirmar_en_el_resumen_guarda_los_detalles(cuadricula, db):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Cubiertas")
+    pulsar(cuadricula, DETALLES)
+    cuadricula.marca_texto.value, cuadricula.modelo_texto.value = "KMC", "X12"
+    cuadricula.selection_otros.value = "12v"
+    pulsar(cuadricula, "Siguiente ▶")
+    cuadricula.marca_texto.value = "Continental"
+    cuadricula.distancialim_texto.value = "3500"
+    pulsar(cuadricula, "Ver resumen ▶")
+    pulsar(cuadricula, "Confirmar")
+    assert filas_bd(db) == [("cadena", "MTB", "2026-05-20", "KMC", "X12", "12v", 2000),
+                            ("Cubiertas", "MTB", "2026-05-20", "Continental", None, None, 3500)]
+    assert cuadricula.componentes_cambiados == [] and cuadricula.detalles_cambiados == {}
+
+
+def test_editar_vuelve_a_la_ronda_con_lo_escrito(cuadricula, db):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Cubiertas")
+    pulsar(cuadricula, DETALLES)
+    cuadricula.marca_texto.value = "KMC"
+    cuadricula.selection_otros.value = "11v"
+    pulsar(cuadricula, "Siguiente ▶")
+    cuadricula.marca_texto.value = "Continental"
+    pulsar(cuadricula, "Ver resumen ▶")
+    pulsar(cuadricula, "Editar")
+    assert cuadricula.label_subtitulo_componente.text == "CADENA  (1/2)"
+    assert (cuadricula.marca_texto.value, cuadricula.selection_otros.value) == ("KMC", "11v")
+    cuadricula.marca_texto.value = "Shimano"
+    pulsar(cuadricula, "Siguiente ▶")
+    assert cuadricula.marca_texto.value == "Continental"
+    pulsar(cuadricula, "Ver resumen ▶")
+    assert [f.marca for f in cuadricula.tablaResumenCambiados.data] == ["Shimano", "Continental"]
+    pulsar(cuadricula, "Confirmar")
+    assert [f[3] for f in filas_bd(db)] == ["Shimano", "Continental"]
+
+
+def test_volver_en_los_detalles_va_al_anterior_y_luego_a_la_cuadricula(cuadricula):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Cubiertas")
+    pulsar(cuadricula, DETALLES)
+    cuadricula.marca_texto.value = "KMC"
+    pulsar(cuadricula, "Siguiente ▶")
+    cuadricula.marca_texto.value = "Continental"
+    pulsar(cuadricula, "◀ Volver")
+    assert cuadricula.label_subtitulo_componente.text == "CADENA  (1/2)"
+    assert cuadricula.marca_texto.value == "KMC"
+    pantalla = pulsar(cuadricula, "◀ Volver")
+    assert boton(pantalla, "Cadena") and cuadricula.componentes_cambiados == ["taller.cadena", "taller.cubiertas"]
+    pulsar(cuadricula, DETALLES)
+    pulsar(cuadricula, "Siguiente ▶")
+    assert cuadricula.marca_texto.value == "Continental", "Lo escrito se conserva"
+
+
+def test_detalles_sin_fecha_no_avanzan(cuadricula):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, DETALLES)
+    cuadricula.entrada_fecha.value = ""
+    pulsar(cuadricula, "Ver resumen ▶")
+    assert cuadricula.label_pantalla_dos.text == "Faltan campos obligatorios (*)"
+    cuadricula.entrada_fecha.value = "20/05/2026"
+    pulsar(cuadricula, "Ver resumen ▶")
+    assert cuadricula.label_pantalla_dos.text == "Fecha no válida (AAAA-MM-DD)"
+
+
+def test_desde_estadisticas_confirmar_vuelve_a_estadisticas(en_menu, db):
+    pulsar(en_menu, "Estadísticas")
+    pulsar(en_menu, "Cambio Mecánico")
+    pulsar(en_menu, "MECÁNICO HOY")
+    pulsar(en_menu, "GRAVEL")
+    pulsar(en_menu, "Continuar ▶")
+    pulsar(en_menu, "Cadena")
+    pantalla = pulsar(en_menu, "Confirmar Cambios")
+    assert en_menu.tabla in widgets(pantalla)
+    assert filas_bd(db)[0][:3] == ("cadena", "Gravel", date.today().isoformat())
+
+
+def test_entrar_de_nuevo_en_mantenimiento_vacia_la_pila(cuadricula):
+    pulsar(cuadricula, "Cadena")
+    cuadricula.ir_a_preparacion_mantenimiento()
+    assert cuadricula.componentes_cambiados == []
+
+
+def test_flujo_traducido(cuadricula):
+    translations.set_language("en")
+    pantalla = cuadricula.construir_pantalla_mantenimiento("mantenimiento")
+    assert {"Confirm Changes", "Add Details of Changed Components"} <= set(textos_botones(pantalla))
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Add Details of Changed Components")
+    pantalla = pulsar(cuadricula, "Review ▶")
+    assert "Summary of changed components" in textos_labels(pantalla)
+    assert {"Confirm", "Edit"} <= set(textos_botones(pantalla))

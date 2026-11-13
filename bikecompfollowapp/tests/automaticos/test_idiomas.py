@@ -210,8 +210,10 @@ def test_componente_en_frances_se_guarda_en_castellano(inicio, db):
     pulsar(inicio, "Continuer ▶")
     pulsar(inicio, "Autres")
     pulsar(inicio, "FOURCHE")
+    pulsar(inicio, "Ajouter les détails des composants changés")
     assert inicio.selection_elemento.value == "HORQUILLA"
-    pulsar(inicio, "Enregistrer")
+    pulsar(inicio, "Récapitulatif ▶")
+    pulsar(inicio, "Confirmer")
     assert db.execute("SELECT elemento FROM archivoscomponentes").fetchone() == ("HORQUILLA",)
 
 
@@ -229,7 +231,7 @@ def test_limite_en_ingles_se_guarda_como_superior(inicio, db):
 def test_cabeceras_de_tabla_traducidas(inicio):
     translations.set_language("fr")
     inicio.ir_a_pantalla_tres(None, "DaMario")
-    assert [c.heading for c in inicio.tabla.columns][:3] == ["Composant", "Description", "Date"]
+    assert [c.heading for c in inicio.tabla.columns][:4] == ["Composant", "Modalité", "Description", "Date"]
 
 
 def test_tabla_ajustes_existe_en_bd_nueva(app, tablas):
