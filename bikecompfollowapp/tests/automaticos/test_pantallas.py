@@ -1223,3 +1223,71 @@ def test_columna_editar_traducida(en_menu):
     en_menu.construir_pantalla_tres(USUARIO)
     assert en_menu.tabla.cabecera.children[-1].text == "Edit"
 
+
+
+# ---- Ordenar las tablas de Box pulsando la cabecera ----
+
+def pulsar_cabecera(tabla, atributo):
+    [b for b in tabla.botones_cabecera if b.columna.accessor == atributo][0]._impl.simulate_press()
+
+
+def test_ordenar_por_modalidad_pone_gravel_primero(en_menu, db):
+    _alta(db, "Plato", modalidad="Gravel")
+    _alta(db, "Cubierta", modalidad="MTB")
+    pulsar(en_menu, "Estadísticas")
+    pulsar_cabecera(en_menu.tabla, "modalidad")
+    modalidades = [f.modalidad for f in en_menu.tabla.data]
+    assert modalidades[0] == "Gravel" and modalidades[1] == "MTB" and set(modalidades[2:]) == {"Road"}
+    assert [c.fila.modalidad for c in en_menu.tabla.filas_box] == modalidades, "Las filas pintadas también"
+
+
+def test_pulsar_otra_vez_ordena_al_reves_y_cambia_la_flecha(en_menu, db):
+    _alta(db, "Plato", modalidad="Gravel")
+    pulsar(en_menu, "Estadísticas")
+    pulsar_cabecera(en_menu.tabla, "modalidad")
+    assert en_menu.tabla.botones_cabecera[1].text == "Modalidad ▲"
+    pulsar_cabecera(en_menu.tabla, "modalidad")
+    assert en_menu.tabla.data[-1].modalidad == "Gravel"
+    assert en_menu.tabla.botones_cabecera[1].text == "Modalidad ▼"
+    pulsar_cabecera(en_menu.tabla, "elemento")
+    assert en_menu.tabla.botones_cabecera[1].text == "Modalidad", "Solo la columna ordenada lleva flecha"
+    assert en_menu.tabla.botones_cabecera[0].text == "Componente ▲"
+
+
+def test_numeros_se_ordenan_como_numeros_y_vacios_al_final():
+    from bikecompfollowapp.tabla_filas import Fila, ordenar_filas
+    filas = [Fila(km=v) for v in (100.0, None, "9", 25, "")]
+    assert [f.km for f in ordenar_filas(filas, "km")] == ["9", 25, 100.0, None, ""]
+    assert [f.km for f in ordenar_filas(filas, "km", descendente=True)] == [100.0, 25, "9", None, ""]
+
+
+def test_textos_sin_distinguir_mayusculas_ni_acentos():
+    from bikecompfollowapp.tabla_filas import Fila, ordenar_filas
+    filas = [Fila(n=v) for v in ("pastillas freno", "Cubierta", "Cámara", "cadena", "Plato")]
+    assert [f.n for f in ordenar_filas(filas, "n")] == ["cadena", "Cámara", "Cubierta", "pastillas freno", "Plato"]
+
+
+def test_ordenar_mantiene_la_fila_elegida_y_los_lapices(en_menu, db):
+    _alta(db, "Plato", modalidad="Gravel", activo=0)
+    pulsar(en_menu, "Estadísticas")
+    fila_box(en_menu, "cadena").children[0]._impl.simulate_press()
+    pulsar_cabecera(en_menu.tabla, "modalidad")
+    assert en_menu.obtener_componente_seleccionado() == "cadena"
+    assert fila_box(en_menu, "cadena").style.background_color is not None
+    assert lapiz(fila_box(en_menu, "Plato")) is None and lapiz(fila_box(en_menu, "cadena")) is not None
+
+
+def test_activos_primero_al_ordenar_por_activo(en_menu, db):
+    _alta(db, "Plato", activo=0)
+    pulsar(en_menu, "Estadísticas")
+    pulsar_cabecera(en_menu.tabla, "activo")
+    assert en_menu.tabla.data[-1].elemento == "Plato"
+
+
+def test_la_tabla_de_limites_tambien_se_ordena(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    en_menu.tablaLimites.data = [("cadena", "superior", 2500), ("cadena", "inferior", 300)]
+    pulsar_cabecera(en_menu.tablaLimites, "valor")
+    assert [f.valor for f in en_menu.tablaLimites.data] == [300, 2500]
+    en_menu.tablaLimites.data = [("Plato", "superior", 9000), ("Plato", "inferior", 10)]
+    assert [f.valor for f in en_menu.tablaLimites.data] == [10, 9000], "Datos nuevos: se mantiene el orden"

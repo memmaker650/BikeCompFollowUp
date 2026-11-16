@@ -72,19 +72,20 @@ ELEMENTOS_POR_DEFECTO = ["Cadena", "Pastillas Freno", "Cubiertas"]
 # y, en las tablas hechas con filas de Box (TablaFilas), el ancho de la columna.
 # Tabla 1: los límites (km, horas y meses máx) no se muestran, pero siguen en cada fila (ver filasComponentes)
 COLUMNAS_COMPONENTES = [
-    ("col.componente", "elemento", 170), ("col.modalidad", "modalidad", 80), ("col.descripcion", "descripcion", 120),
-    ("col.fecha", "fechaInsercion", 95), ("col.km_desde_alta", "distanciaDesdeInsercion", 75),
-    ("col.horas_desde_alta", "horasDesdeInsercion", 60), ("col.meses_desde_alta", "mesesDesdeInsercion", 80),
-    ("col.activo", "activo", 55),
+    # anchos con sitio para la flecha ▲/▼ que sale en la cabecera al ordenar por esa columna
+    ("col.componente", "elemento", 160), ("col.modalidad", "modalidad", 95), ("col.descripcion", "descripcion", 110),
+    ("col.fecha", "fechaInsercion", 95), ("col.km_desde_alta", "distanciaDesdeInsercion", 85),
+    ("col.horas_desde_alta", "horasDesdeInsercion", 70), ("col.meses_desde_alta", "mesesDesdeInsercion", 95),
+    ("col.activo", "activo", 70),
 ]
-TAMANO_VENTANA_ESTADISTICAS = (900, 900)   # la tabla de componentes con ✏️ mide unos 870 de ancho
+TAMANO_VENTANA_ESTADISTICAS = (920, 900)   # la tabla de componentes con ✏️ mide unos 880 de ancho
 ICONO_EDITAR = "✏️"           # última columna de la tabla 1: editar el componente (solo los activos)
 
 # Columna Activo de la tabla 1: iconos en lugar de Sí / No
 ICONO_ACTIVO, ICONO_INACTIVO = "✅", "❌"
 COLUMNAS_BICICLETAS = [("col.id", "id"), ("col.marca", "marca"), ("col.modelo", "modelo"),
                        ("col.modalidad", "modalidad"), ("col.anio", "anio"), ("col.activa", "activa")]
-COLUMNAS_LIMITES = [("col.componente", "componente", 170), ("col.tipo_limite", "tipo_limite", 140),
+COLUMNAS_LIMITES = [("col.componente", "componente", 160), ("col.tipo_limite", "tipo_limite", 140),
                     ("col.valor", "valor", 100)]
 
 # Tipos de límite tal y como se guardan en LimitesAlerta -> clave del texto que se muestra
