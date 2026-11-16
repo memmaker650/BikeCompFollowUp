@@ -40,7 +40,7 @@ ANIOS_ESTADISTICAS = 3
 # Campos (en orden) de cada fila que devuelve BaseDatos.componentesEstadisticas
 CAMPOS_ESTADISTICAS = ("elemento", "descripcion", "fechaInsercion", "distanciaLimite", "distanciaDesdeInsercion",
                        "tiempoLimite", "horasDesdeInsercion", "mesesLimite", "mesesDesdeInsercion", "modalidad",
-                       "activo")
+                       "activo", "id")     # id: el de archivoscomponentes (None si el usuario no tiene ese componente)
 NUM_COLUMNAS_ESTADISTICAS = len(CAMPOS_ESTADISTICAS)
 
 
@@ -469,7 +469,8 @@ SELECT COALESCE(u.elemento, c.nombre), u.descripcion, u.fechaInsercion, u.distan
          - (CAST(strftime('%d', 'now', 'localtime') AS INTEGER) < CAST(strftime('%d', u.fechaInsercion) AS INTEGER))
        END,
        {modalidad_u},
-       u.activo
+       u.activo,
+       u.id
 FROM catalogo c
 LEFT JOIN ultimo u ON lower(u.elemento) = lower(c.nombre)
 LEFT JOIN datosComponente dc ON dc.idComponente = u.id
@@ -934,7 +935,46 @@ class BaseDatos:
             vacias = (None,) * (NUM_COLUMNAS_ESTADISTICAS - 1)
             filas = [(nombre, *vacias) for (nombre,) in conexion.execute(
                 "SELECT DISTINCT nombre FROM Componente WHERE trim(COALESCE(nombre, '')) <> ''")]
-        return sorted(filas, key=lambda fila: (orden_alfabetico(fila[0]), fila[-2] or ""))
+        i_modalidad = CAMPOS_ESTADISTICAS.index("modalidad")
+        return sorted(filas, key=lambda fila: (orden_alfabetico(fila[0]), fila[i_modalidad] or ""))
+
+    CAMPOS_EDICION = ("id", "usuario", "elemento", "modalidad", "descripcion", "marca", "modelo", "fechaInsercion",
+                      "distanciaLimite", "tiempoLimite", "mesesLimite", "otros", "activo")
+
+    def componentePorId(self, id_componente):
+        """Dict con los datos de un componente de archivoscomponentes (None si no existe)."""
+        try:
+            asegurarColumnasArchivosComponentes(self.conexion)
+            fila = self.conexion.execute(
+                f"SELECT {', '.join(self.CAMPOS_EDICION)} FROM archivoscomponentes WHERE id = ?",
+                (id_componente,)).fetchone()
+        except sqlite3.Error as error:
+            logging.error("Error al leer el componente %s: %s", id_componente, error)
+            return None
+        return dict(zip(self.CAMPOS_EDICION, fila)) if fila else None
+
+    def actualizarComponente(self, id_componente, fecha, elemento, modalidad, marca, modelo, distancia, tiempo,
+                             meses, otros=None) -> bool:
+        """Edita un componente ya dado de alta. Si era POR DEFECTO deja de serlo (ya tiene datos del usuario)."""
+        if modalidad not in MODALIDADES_ESTADISTICAS:
+            logging.error("Edición del componente %s sin modalidad válida: %r", id_componente, modalidad)
+            return False
+        try:
+            cursor = self.conexion.execute(
+                "UPDATE archivoscomponentes SET fechaInsercion = ?, elemento = ?, modalidad = ?, marca = ?, "
+                "modelo = ?, distanciaLimite = ?, tiempoLimite = ?, mesesLimite = ?, otros = ?, "
+                "descripcion = CASE WHEN descripcion = ? THEN NULL ELSE descripcion END WHERE id = ?",
+                (fecha, elemento, modalidad, marca, modelo, distancia, tiempo, meses, otros,
+                 DESCRIPCION_POR_DEFECTO, id_componente))
+            self.conexion.commit()
+        except sqlite3.Error as error:
+            logging.error("Error al editar el componente %s: %s", id_componente, error)
+            return False
+        if cursor.rowcount != 1:
+            logging.error("No existe el componente %s para editarlo", id_componente)
+            return False
+        logging.info("Componente %s editado: %s (%s)", id_componente, elemento, modalidad)
+        return True
 
     def bicicletasDeUsuario(self, usuario):
         """[(id, marca, modelo, modalidad, anio, activa)] de las bicis del usuario: primero las activas."""

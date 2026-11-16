@@ -32,6 +32,8 @@ def widgets(raiz, tipo=None):
         if tipo is None or isinstance(w, tipo):
             encontrados.append(w)
         pendientes.extend(getattr(w, "children", None) or [])
+        if isinstance(w, toga.ScrollContainer) and w.content is not None:   # p. ej. Estadísticas
+            pendientes.append(w.content)
     return encontrados
 
 

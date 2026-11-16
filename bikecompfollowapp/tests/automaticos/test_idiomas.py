@@ -21,6 +21,8 @@ def botones(raiz):
         if isinstance(w, toga.Button):
             encontrados.append(w)
         pendientes.extend(getattr(w, "children", None) or [])
+        if isinstance(w, toga.ScrollContainer) and w.content is not None:   # p. ej. Estadísticas
+            pendientes.append(w.content)
     return encontrados
 
 

@@ -21,10 +21,11 @@ if __name__ == "__main__" or __package__ is None:
     import registro
     import rutas
     import stravaConnect
+    import tabla_filas
     import translations
 else:
     from . import DB_Operations as dbops
-    from . import notificaciones, registro, rutas, stravaConnect, translations
+    from . import notificaciones, registro, rutas, stravaConnect, tabla_filas, translations
 t = translations.t
 
 # ---- Medidas de interfaz (Toga trabaja en píxeles; 1 cm ≈ 38 px a 96 ppp) ----
@@ -68,18 +69,23 @@ COMPONENTES_URGENTES_PRUEBA = ["Cadena", "Pastillas de Freno"]
 ELEMENTOS_POR_DEFECTO = ["Cadena", "Pastillas Freno", "Cubiertas"]
 
 # Columnas de las tablas de la pantalla Estadísticas: (clave de traducción de la cabecera, atributo de la fila)
+# y, en las tablas hechas con filas de Box (TablaFilas), el ancho de la columna.
 # Tabla 1: los límites (km, horas y meses máx) no se muestran, pero siguen en cada fila (ver filasComponentes)
 COLUMNAS_COMPONENTES = [
-    ("col.componente", "elemento"), ("col.modalidad", "modalidad"), ("col.descripcion", "descripcion"),
-    ("col.fecha", "fechaInsercion"), ("col.km_desde_alta", "distanciaDesdeInsercion"), ("col.horas_desde_alta", "horasDesdeInsercion"),
-    ("col.meses_desde_alta", "mesesDesdeInsercion"), ("col.activo", "activo"),
+    ("col.componente", "elemento", 170), ("col.modalidad", "modalidad", 80), ("col.descripcion", "descripcion", 120),
+    ("col.fecha", "fechaInsercion", 95), ("col.km_desde_alta", "distanciaDesdeInsercion", 75),
+    ("col.horas_desde_alta", "horasDesdeInsercion", 60), ("col.meses_desde_alta", "mesesDesdeInsercion", 80),
+    ("col.activo", "activo", 55),
 ]
+TAMANO_VENTANA_ESTADISTICAS = (900, 900)   # la tabla de componentes con ✏️ mide unos 870 de ancho
+ICONO_EDITAR = "✏️"           # última columna de la tabla 1: editar el componente (solo los activos)
 
 # Columna Activo de la tabla 1: iconos en lugar de Sí / No
 ICONO_ACTIVO, ICONO_INACTIVO = "✅", "❌"
 COLUMNAS_BICICLETAS = [("col.id", "id"), ("col.marca", "marca"), ("col.modelo", "modelo"),
                        ("col.modalidad", "modalidad"), ("col.anio", "anio"), ("col.activa", "activa")]
-COLUMNAS_LIMITES = [("col.componente", "componente"), ("col.tipo_limite", "tipo_limite"), ("col.valor", "valor")]
+COLUMNAS_LIMITES = [("col.componente", "componente", 170), ("col.tipo_limite", "tipo_limite", 140),
+                    ("col.valor", "valor", 100)]
 
 # Tipos de límite tal y como se guardan en LimitesAlerta -> clave del texto que se muestra
 TIPOS_LIMITE = {"superior": "alerta.superior", "inferior": "alerta.inferior"}
@@ -117,7 +123,14 @@ def icono_activo(valor):
 def filasComponentes(filas):
     """Filas de componentesEstadisticas -> dicts por campo para la tabla 1, con la columna activo como icono.
     Llevan también los campos que no se muestran (km, horas y meses máx)."""
-    return [{**dict(zip(dbops.CAMPOS_ESTADISTICAS, fila)), "activo": icono_activo(fila[-1])} for fila in filas]
+    filas_dict = []
+    for fila in filas:
+        datos = dict(zip(dbops.CAMPOS_ESTADISTICAS, fila))
+        # editable: solo los componentes activos que el usuario tiene dados de alta (con id)
+        datos["editable"] = bool(es_activo(datos.get("activo"))) and datos.get("id") is not None
+        datos["activo"] = icono_activo(datos.get("activo"))
+        filas_dict.append(datos)
+    return filas_dict
 
 
 def pintar_fondo_boton(boton, color_hex):
@@ -142,7 +155,12 @@ def pintar_fondo_boton(boton, color_hex):
 
 
 def _columnas(definicion):
-    return [AccessorColumn(t(clave), atributo) for clave, atributo in definicion]
+    return [AccessorColumn(t(clave), atributo) for clave, atributo, *_ancho in definicion]
+
+
+def _columnas_filas(definicion):
+    """Columnas para TablaFilas: (cabecera traducida, atributo, ancho)."""
+    return [(t(clave), atributo, *ancho) for clave, atributo, *ancho in definicion]
 
 
 # ---- Pantallas de mantenimiento ----
@@ -962,15 +980,15 @@ class BikeCompFollowApp(toga.App):
             data = []
 
         self.componentes_disponibles = [fila["elemento"] for fila in data if fila.get("elemento") is not None]
-        # Altura según nº de filas (Toga no la calcula sola). Tope para listas largas → scroll dentro de la tabla.
-        _h_cabecera, _h_fila, _h_max = 28, 22, 520
-        _altura_tabla = min(_h_cabecera + max(len(data), 1) * _h_fila, _h_max)
 
-        self.tabla = toga.Table(
-            columns=_columnas(COLUMNAS_COMPONENTES),
+        # Tabla hecha con filas de Box para poder poner el botón ✏️ (editar) en la última columna
+        self.tabla = tabla_filas.TablaFilas(
+            _columnas_filas(COLUMNAS_COMPONENTES),
             data=data,
             on_select=self.actualizar_limites_componente_seleccionado,
-            style=Pack(height=_altura_tabla, flex=1),
+            accion=self.boton_editar_componente,
+            titulo_accion=t("col.editar"),
+            style=Pack(direction=COLUMN, flex=1),
         )
 
         # Tabla "Tiempo y Kms por Modalidad" (Road, MTB, Gravel x los 3 últimos años)
@@ -1002,10 +1020,10 @@ class BikeCompFollowApp(toga.App):
         )
 
         # Tabla de detalle: se rellena al seleccionar una fila de la tabla principal.
-        self.tablaLimites = toga.Table(
-            columns=_columnas(COLUMNAS_LIMITES),
+        self.tablaLimites = tabla_filas.TablaFilas(
+            _columnas_filas(COLUMNAS_LIMITES),
             data=[],
-            style=Pack(height=_altura_tabla, flex=1),
+            style=Pack(direction=COLUMN, flex=1),
         )
 
         contenido_box = toga.Box(
@@ -1038,8 +1056,11 @@ class BikeCompFollowApp(toga.App):
             style=Pack(direction=COLUMN),
         )
 
+        # Las tablas van en un ScrollContainer: con muchos componentes se hace scroll y la barra inferior
+        # (Volver, Cambio Mecánico, + Límite Alerta) sigue siempre visible abajo.
+        self.scroll_estadisticas = toga.ScrollContainer(content=contenido_box, style=Pack(flex=1))
         main_box = toga.Box(style=Pack(direction=COLUMN, margin=10))
-        main_box.add(contenido_box)
+        main_box.add(self.scroll_estadisticas)
         main_box.add(self._barra_inferior(
             izquierda=self._boton_volver(self.ir_a_menu_usuario),
             derecha=botones_derecha,
@@ -1048,7 +1069,80 @@ class BikeCompFollowApp(toga.App):
 
     def ir_a_pantalla_tres(self, widget, valor):
         self._mostrar(self.construir_pantalla_tres(valor))
+        self.agrandar_ventana(*TAMANO_VENTANA_ESTADISTICAS)
         self.mostrarAdvertenciaSinDatos(valor, self.anios_sin_datos)
+
+    def volver_a_estadisticas(self):
+        """Vuelve a Estadísticas (sin repetir la advertencia de años sin datos)."""
+        self._mostrar(self.construir_pantalla_tres(self.usuarioSeleccionado))
+        self.agrandar_ventana(*TAMANO_VENTANA_ESTADISTICAS)
+
+    def agrandar_ventana(self, ancho, alto):
+        """Agranda la ventana principal hasta ancho x alto (nunca la encoge ni pasa del tamaño de la pantalla).
+        Hace falta en Estadísticas: su contenido va en un ScrollContainer, que no hace crecer la ventana solo."""
+        try:
+            actual_ancho, actual_alto = self.main_window.size
+            pantallas = getattr(self, "screens", None) or []
+            if pantallas:
+                max_ancho, max_alto = pantallas[0].size
+                ancho, alto = min(ancho, max_ancho), min(alto, max_alto - 60)   # sitio para la barra de menús
+            nuevo = (max(actual_ancho, ancho), max(actual_alto, alto))
+            if nuevo != (actual_ancho, actual_alto):
+                self.main_window.size = nuevo
+        except Exception as error:     # solo es comodidad: nunca impide mostrar la pantalla
+            logging.warning("No se pudo agrandar la ventana: %s", error)
+
+    # -------- Editar un componente desde Estadísticas (botón ✏️) --------
+    def boton_editar_componente(self, fila):
+        """Celda de la última columna de la tabla 1: ✏️ solo en los componentes activos."""
+        if not getattr(fila, "editable", False):
+            return None
+        return toga.Button(ICONO_EDITAR, on_press=lambda widget, id_=fila.id: self.editar_componente(id_),
+                           style=Pack(width=44))
+
+    def editar_componente(self, id_componente):
+        """Abre la pantalla de alta con los datos del componente para cambiarlos (Guardar actualiza esa fila)."""
+        componente = self.db.componentePorId(id_componente)
+        if componente is None:
+            self._mostrar_estado(self.label_pantalla_dos, t("estado.lectura_error"), ok=False)
+            return False
+        self.componente_en_edicion = componente
+        valores = dict(
+            marca=componente["marca"] or "", modelo=componente["modelo"] or "", otros=componente["otros"] or "",
+            km=texto_numero(componente["distanciaLimite"]), horas=texto_numero(componente["tiempoLimite"]),
+            meses=texto_numero(componente["mesesLimite"]))
+        pantalla = self.construir_pantalla_cinco(
+            self.usuarioSeleccionado, elemento=componente["elemento"], modalidad=componente["modalidad"],
+            volver=self.volver_a_estadisticas,
+            subtitulo=t("editar.subtitulo", componente=(componente["elemento"] or "").upper()),
+            valores=valores, siguiente=(t("comun.guardar"), self.guardar_edicion_componente))
+        self.label_pantalla_dos.text = t("editar.titulo")
+        self.entrada_fecha.value = componente["fechaInsercion"] or ""
+        self._mostrar(pantalla)
+        return True
+
+    def guardar_edicion_componente(self, widget=None) -> bool:
+        detalle = self.leer_detalle_formulario()
+        if not (detalle["fecha"] and detalle["elemento"] and detalle["modalidad"]):
+            self._mostrar_estado(self.label_pantalla_dos, t("estado.faltan_obligatorios"), ok=False)
+            return False
+        try:
+            date.fromisoformat(detalle["fecha"])
+        except ValueError:
+            self._mostrar_estado(self.label_pantalla_dos, t("estado.fecha_invalida"), ok=False)
+            return False
+        elemento, modalidad = detalle["elemento"], detalle["modalidad"]
+        km, horas, meses = self.db.limitesComponente(elemento, self.usuarioSeleccionado, modalidad)
+        ok = self.db.actualizarComponente(
+            self.componente_en_edicion["id"], detalle["fecha"], elemento, modalidad, detalle["marca"].strip(),
+            detalle["modelo"].strip() or None, detalle["km"].strip() or km, detalle["horas"].strip() or horas,
+            detalle["meses"].strip() or meses, (detalle["otros"] or None) if self.es_cadena(elemento) else None)
+        if not ok:
+            self._mostrar_estado(self.label_pantalla_dos, t("estado.componente_error"), ok=False)
+            return False
+        self.volver_a_estadisticas()
+        self._mostrar_estado(self.label_pantalla_dos, t("estado.componente_editado"))
+        return True
 
     def construirTablaModalidad(self, filas, anios):
         """Tabla Tiempo y Kms por Modalidad, con el mismo estilo (toga.Table) que las otras dos de la pantalla.

@@ -13,6 +13,11 @@
     <text key="comun.volver">◀ Volver</text>
     <text key="comun.si">Sí</text>
     <text key="comun.no">No</text>
+    <text key="comun.guardar">Guardar</text>
+    <text key="col.editar">Editar</text>
+    <text key="editar.titulo">Editar Componente</text>
+    <text key="editar.subtitulo">{componente}</text>
+    <text key="estado.componente_editado">Componente actualizado.</text>
     <text key="comun.cargar">Cargar</text>
     <text key="comun.anadir">Añadir</text>
     <text key="comun.placeholder">Escribe algo...</text>
@@ -175,6 +180,11 @@
     <text key="comun.volver">◀ Back</text>
     <text key="comun.si">Yes</text>
     <text key="comun.no">No</text>
+    <text key="comun.guardar">Save</text>
+    <text key="col.editar">Edit</text>
+    <text key="editar.titulo">Edit Component</text>
+    <text key="editar.subtitulo">{componente}</text>
+    <text key="estado.componente_editado">Component updated.</text>
     <text key="comun.cargar">Save</text>
     <text key="comun.anadir">Add</text>
     <text key="comun.placeholder">Type something...</text>
@@ -327,6 +337,11 @@
     <text key="comun.volver">◀ Retour</text>
     <text key="comun.si">Oui</text>
     <text key="comun.no">Non</text>
+    <text key="comun.guardar">Enregistrer</text>
+    <text key="col.editar">Modifier</text>
+    <text key="editar.titulo">Modifier le composant</text>
+    <text key="editar.subtitulo">{componente}</text>
+    <text key="estado.componente_editado">Composant mis à jour.</text>
     <text key="comun.cargar">Enregistrer</text>
     <text key="comun.anadir">Ajouter</text>
     <text key="comun.placeholder">Écrivez quelque chose...</text>

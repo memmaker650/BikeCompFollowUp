@@ -186,6 +186,8 @@ def test_cargar_guarda_la_modalidad_elegida(ui_usuario):
         if isinstance(w, toga.Button) and w.text == "Cargar":
             cargar = w
         pendientes.extend(getattr(w, "children", None) or [])
+        if isinstance(w, toga.ScrollContainer) and w.content is not None:   # p. ej. Estadísticas
+            pendientes.append(w.content)
     cargar._impl.simulate_press()
     assert ui_usuario.sqliteConnection.execute(
         "SELECT elemento, modalidad FROM archivoscomponentes WHERE descripcion IS NOT ?", (DESCRIPCION_POR_DEFECTO,)

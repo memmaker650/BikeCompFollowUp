@@ -34,6 +34,8 @@ def widgets(raiz, tipo=None):
         if tipo is None or isinstance(w, tipo):
             encontrados.append(w)
         pendientes.extend(getattr(w, "children", None) or [])
+        if isinstance(w, toga.ScrollContainer) and w.content is not None:   # p. ej. Estadísticas
+            pendientes.append(w.content)
     return encontrados
 
 
@@ -612,7 +614,7 @@ def test_estadisticas_usuario_en_azul_a_la_izquierda(en_menu):
     assert linea.style.direction == "row" and linea.children[:2] == [etiqueta, usuario]
     assert (etiqueta.text, usuario.text) == ("Usuario: ", USUARIO)
     assert etiqueta.style.color == AZUL and usuario.style.color is None
-    contenido = pantalla.children[0]
+    contenido = pantalla.children[0].content            # las tablas van en un ScrollContainer
     assert contenido.children[0] is linea, "Primera línea de la pantalla"
     assert f"Usuario: {USUARIO}" not in textos_labels(pantalla), "Ya no va centrado en un solo texto"
 
@@ -652,8 +654,11 @@ def test_tabla_modalidad_cabeceras_y_filas(en_menu, monkeypatch):
 
 
 def test_tabla_modalidad_mismo_estilo_que_las_otras_tablas(en_menu):
+    from bikecompfollowapp.tabla_filas import TablaFilas
     pulsar(en_menu, "Estadísticas")
-    assert all(isinstance(tabla, toga.Table) for tabla in (en_menu.tabla, en_menu.tablaModalidad, en_menu.tablaLimites))
+    assert isinstance(en_menu.tablaModalidad, toga.Table)
+    assert all(isinstance(tabla, TablaFilas) for tabla in (en_menu.tabla, en_menu.tablaLimites)), \
+        "Componentes y límites: tablas con filas de Box (botón ✏️ en cada fila)"
     assert en_menu.tablaModalidad.style.flex == en_menu.tabla.style.flex == 1
     assert en_menu.tablaModalidad.style.height == 28 + 3 * 22
 
@@ -1099,3 +1104,122 @@ def test_flujo_traducido(cuadricula):
     pantalla = pulsar(cuadricula, "Review ▶")
     assert "Summary of changed components" in textos_labels(pantalla)
     assert {"Confirm", "Edit"} <= set(textos_botones(pantalla))
+
+
+# ---- Tablas de componentes y límites con filas de Box; ✏️ para editar los componentes activos ----
+
+def fila_box(ui, elemento):
+    return [c for c in ui.tabla.filas_box if c.fila.elemento == elemento][0]
+
+
+def lapiz(caja):
+    botones = [b for b in widgets(caja, toga.Button) if b.text == "✏️"]
+    return botones[0] if botones else None
+
+
+def test_tabla_componentes_hecha_con_filas_de_box(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    assert len(en_menu.tabla.filas_box) == len(en_menu.tabla.data)
+    assert all(isinstance(c, toga.Box) and c.style.direction == "row" for c in en_menu.tabla.filas_box)
+    cabecera = [w.text for w in en_menu.tabla.cabecera.children]
+    assert cabecera == [c.heading for c in en_menu.tabla.columns] + ["Editar"]
+
+
+def test_columnas_alineadas_con_la_cabecera(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    anchos_cabecera = [w.style.width for w in en_menu.tabla.cabecera.children]
+    for caja in en_menu.tabla.filas_box:
+        assert [w.style.width for w in caja.children] == anchos_cabecera
+
+
+def test_lapiz_solo_en_los_componentes_activos(en_menu, db):
+    _alta(db, "Plato", activo=0)
+    pulsar(en_menu, "Estadísticas")
+    assert lapiz(fila_box(en_menu, "Plato")) is None, "Inactivo: sin ✏️"
+    assert lapiz(fila_box(en_menu, "cadena")) is not None, "Activo (POR DEFECTO): con ✏️"
+    activos = [c for c in en_menu.tabla.filas_box if c.fila.activo == "✅"]
+    assert activos and all(lapiz(c) is not None for c in activos)
+    assert all(lapiz(c) is None for c in en_menu.tabla.filas_box if c.fila.activo != "✅")
+
+
+def test_lapiz_en_la_ultima_columna(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    caja = fila_box(en_menu, "cadena")
+    assert lapiz(caja.children[-1]) is lapiz(caja)
+
+
+def test_pulsar_el_componente_elige_la_fila_y_carga_sus_limites(en_menu, db):
+    db.execute("INSERT INTO LimitesAlerta (componente, tipo_limite, valor) VALUES ('cadena', 'superior', 2500)")
+    db.connection.commit()
+    pulsar(en_menu, "Estadísticas")
+    caja = fila_box(en_menu, "cadena")
+    caja.children[0]._impl.simulate_press()
+    assert en_menu.obtener_componente_seleccionado() == "cadena"
+    assert caja.style.background_color is not None
+    assert [(f.componente, f.valor) for f in en_menu.tablaLimites.data] == [("cadena", 2500)]
+    assert len(en_menu.tablaLimites.filas_box) == 1
+
+
+def test_lapiz_abre_la_edicion_con_los_datos_del_componente(en_menu, db):
+    db.execute("INSERT INTO archivoscomponentes (usuario, elemento, modalidad, marca, modelo, otros, fechaInsercion, "
+               "distanciaLimite, tiempoLimite, activo) VALUES (?, 'cadena', 'Road', 'KMC', 'X11', '11v', '2026-03-01', "
+               "1800, 400, 1)", (USUARIO,))
+    db.connection.commit()
+    pulsar(en_menu, "Estadísticas")
+    lapiz(fila_box(en_menu, "cadena"))._impl.simulate_press()
+    pantalla = en_menu.main_window.content
+    assert en_menu.label_pantalla_dos.text == "Editar Componente"
+    assert en_menu.label_subtitulo_componente.text == "CADENA"
+    assert (en_menu.entrada_fecha.value, en_menu.selection_elemento.value, en_menu.selection_modalidad.value) == (
+        "2026-03-01", "cadena", "Road")
+    assert (en_menu.marca_texto.value, en_menu.modelo_texto.value, en_menu.selection_otros.value) == ("KMC", "X11", "11v")
+    assert (en_menu.distancialim_texto.value, en_menu.tiempolim_texto.value) == ("1800", "400")
+    assert "Guardar" in textos_botones(pantalla)
+    assert not {"Cargar", "+ Componente"} & set(textos_botones(pantalla))
+
+
+def test_guardar_la_edicion_actualiza_el_mismo_componente(en_menu, db):
+    pulsar(en_menu, "Estadísticas")
+    antes = db.execute("SELECT count(*) FROM archivoscomponentes").fetchone()
+    id_cadena = fila_box(en_menu, "cadena").fila.id
+    lapiz(fila_box(en_menu, "cadena"))._impl.simulate_press()
+    en_menu.marca_texto.value, en_menu.modelo_texto.value = "Shimano", "CN-M8100"
+    en_menu.selection_otros.value = "12v"
+    en_menu.distancialim_texto.value = "2200"
+    pantalla = pulsar(en_menu, "Guardar")
+    assert db.execute("SELECT count(*) FROM archivoscomponentes").fetchone() == antes, "No crea otro"
+    assert db.execute("SELECT marca, modelo, otros, distanciaLimite, descripcion FROM archivoscomponentes "
+                      "WHERE id = ?", (id_cadena,)).fetchone() == ("Shimano", "CN-M8100", "12v", 2200, None)
+    assert en_menu.tabla in widgets(pantalla), "Vuelve a Estadísticas"
+    assert en_menu.label_pantalla_dos.text == "Componente actualizado."
+
+
+def test_volver_desde_la_edicion_no_cambia_nada(en_menu, db):
+    pulsar(en_menu, "Estadísticas")
+    id_cadena = fila_box(en_menu, "cadena").fila.id
+    lapiz(fila_box(en_menu, "cadena"))._impl.simulate_press()
+    en_menu.marca_texto.value = "Otra"
+    pantalla = pulsar(en_menu, "◀ Volver")
+    assert en_menu.tabla in widgets(pantalla)
+    assert db.execute("SELECT marca FROM archivoscomponentes WHERE id = ?", (id_cadena,)).fetchone() != ("Otra",)
+
+
+def test_edicion_sin_fecha_no_guarda(en_menu, db):
+    pulsar(en_menu, "Estadísticas")
+    lapiz(fila_box(en_menu, "cadena"))._impl.simulate_press()
+    en_menu.entrada_fecha.value = ""
+    pulsar(en_menu, "Guardar")
+    assert en_menu.label_pantalla_dos.text == "Faltan campos obligatorios (*)"
+
+
+def test_tabla_limites_hecha_con_filas_de_box(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    assert [w.text for w in en_menu.tablaLimites.cabecera.children] == ["Componente", "Tipo Límite", "Valor"]
+    assert en_menu.tablaLimites.data == [] and en_menu.tablaLimites.filas_box == []
+
+
+def test_columna_editar_traducida(en_menu):
+    translations.set_language("en")
+    en_menu.construir_pantalla_tres(USUARIO)
+    assert en_menu.tabla.cabecera.children[-1].text == "Edit"
+
