@@ -65,17 +65,17 @@ def test_seleccionar_limites_componente(app, campo):
     _preparar_limite(app, campo, componente="Plato", valor="20000")
     app.cargar_limiteAlerta()
 
-    limites = app.seleccionarLimitesComponente("Cambio Trasero")
+    limites = app.db.seleccionarLimitesComponente("Cambio Trasero")
     assert sorted(limites) == [("Cambio Trasero", "inferior", 1000), ("Cambio Trasero", "superior", 5000)]
 
 
 def test_seleccionar_limites_componente_sin_datos(app):
-    assert app.seleccionarLimitesComponente("No existe") == []
+    assert app.db.seleccionarLimitesComponente("No existe") == []
 
 
 def test_seleccionar_limites_sin_tabla_devuelve_lista_vacia(app):
     app.sqliteConnection.execute("DROP TABLE LimitesAlerta")
-    assert app.seleccionarLimitesComponente("Cambio Trasero") == []
+    assert app.db.seleccionarLimitesComponente("Cambio Trasero") == []
 
 
 def test_tipos_alerta_se_leen_de_limites_alerta(app, campo):

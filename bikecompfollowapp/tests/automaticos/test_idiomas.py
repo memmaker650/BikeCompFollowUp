@@ -21,6 +21,8 @@ def botones(raiz):
         if isinstance(w, toga.Button):
             encontrados.append(w)
         pendientes.extend(getattr(w, "children", None) or [])
+        if isinstance(w, toga.ScrollContainer) and w.content is not None:   # p. ej. Estadísticas
+            pendientes.append(w.content)
     return encontrados
 
 
@@ -86,7 +88,7 @@ def test_t_con_marcadores():
     translations.set_language("en")
     assert t("menu.usuario", usuario="Ana") == "User: Ana"
     translations.set_language("fr")
-    assert t("strava.procesando", actual=2, total=5) == "Traitement 2 sur 5"
+    assert t("strava.guardando", actual=2, total=5) == "Enregistrement de l'activité 2 sur 5"
 
 
 def test_clave_inexistente_devuelve_la_clave():
@@ -166,9 +168,9 @@ def test_bandera_cambia_idioma_y_textos(inicio, pulsaciones, idioma, titulo, nue
 
 def test_idioma_se_guarda_en_bd(inicio):
     pulsar(inicio, BANDERAS["es"])
-    assert inicio.leerAjuste("idioma") == "en"
+    assert inicio.db.leerAjuste("idioma") == "en"
     pulsar(inicio, BANDERAS["en"])
-    assert inicio.leerAjuste("idioma") == "fr"
+    assert inicio.db.leerAjuste("idioma") == "fr"
 
 
 def test_idioma_guardado_se_recupera_al_arrancar(inicio):
@@ -179,10 +181,10 @@ def test_idioma_guardado_se_recupera_al_arrancar(inicio):
 
 
 def test_ajustes_guardar_y_leer(app):
-    assert app.leerAjuste("x", "def") == "def"
-    assert app.guardarAjuste("x", "1") is True
-    assert app.guardarAjuste("x", "2") is True
-    assert app.leerAjuste("x") == "2"
+    assert app.db.leerAjuste("x", "def") == "def"
+    assert app.db.guardarAjuste("x", "1") is True
+    assert app.db.guardarAjuste("x", "2") is True
+    assert app.db.leerAjuste("x") == "2"
 
 
 def test_menu_y_mantenimiento_en_ingles(inicio):
@@ -190,7 +192,10 @@ def test_menu_y_mantenimiento_en_ingles(inicio):
     pantalla = pulsar(inicio, "DaMario-Damián")
     assert {"Statistics", "Maintenance / Workshop visit", "Strava Sync", "◀ Back"} <= set(textos(pantalla))
 
-    pantalla = pulsar(inicio, "Maintenance / Workshop visit")
+    pulsar(inicio, "Maintenance / Workshop visit")
+    pulsar(inicio, "MECHANIC TODAY")
+    pulsar(inicio, "MTB")
+    pantalla = pulsar(inicio, "Continue ▶")
     assert {"Chain", "Brake pads", "Others"} <= set(textos(pantalla))
 
     pantalla = pulsar(inicio, "Others")
@@ -202,10 +207,15 @@ def test_componente_en_frances_se_guarda_en_castellano(inicio, db):
     pulsar(inicio, BANDERAS["en"])       # -> francés
     pulsar(inicio, "DaMario-Damián")
     pulsar(inicio, "Entretien / Passage à l'atelier")
+    pulsar(inicio, "MÉCANICIEN AUJOURD'HUI")
+    pulsar(inicio, "GRAVEL")
+    pulsar(inicio, "Continuer ▶")
     pulsar(inicio, "Autres")
     pulsar(inicio, "FOURCHE")
+    pulsar(inicio, "Ajouter les détails des composants changés")
     assert inicio.selection_elemento.value == "HORQUILLA"
-    pulsar(inicio, "Enregistrer")
+    pulsar(inicio, "Récapitulatif ▶")
+    pulsar(inicio, "Confirmer")
     assert db.execute("SELECT elemento FROM archivoscomponentes").fetchone() == ("HORQUILLA",)
 
 
@@ -223,7 +233,7 @@ def test_limite_en_ingles_se_guarda_como_superior(inicio, db):
 def test_cabeceras_de_tabla_traducidas(inicio):
     translations.set_language("fr")
     inicio.ir_a_pantalla_tres(None, "DaMario")
-    assert [c.heading for c in inicio.tabla.columns][:3] == ["Composant", "Description", "Date"]
+    assert [c.heading for c in inicio.tabla.columns][:4] == ["Composant", "Modalité", "Description", "Date"]
 
 
 def test_tabla_ajustes_existe_en_bd_nueva(app, tablas):

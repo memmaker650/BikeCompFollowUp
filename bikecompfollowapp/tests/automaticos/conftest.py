@@ -19,7 +19,10 @@ from types import SimpleNamespace
 import pytest
 
 from bikecompfollowapp import translations
-from bikecompfollowapp.app import AppPaths, BikeCompFollowApp
+from bikecompfollowapp.app import (
+    AppPaths,
+    BikeCompFollowApp,
+)
 
 
 class Campo:
@@ -62,8 +65,12 @@ def app(app_paths):
     instancia.label_pantalla_LimiteNuevaAlerta = Campo(text="Límites ")
     instancia.label_estado = ""
     instancia.arrancarDB()
-    instancia.crearTablaAlertThresholds()
-    instancia.crearTablaAjustes()
+    instancia.db.crearTablaAlertThresholds()
+    instancia.db.crearTablaAjustes()
+    instancia.db.crearTablaActividadesStrava()
+    instancia.db.crearTablaDatosComponente()
+    instancia.db.crearTablaBicicletas()
+    instancia.db.crearTablaPasosTaller()
     instancia.cargarIdioma()
     yield instancia
     instancia.sqliteConnection.close()

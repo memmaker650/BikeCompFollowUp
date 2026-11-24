@@ -3,6 +3,9 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 import json
+import shutil
+from collections import Counter
+import re
 import sys
 import math
 
@@ -17,6 +20,11 @@ import requests
 import time
 
 from stravalib.client import Client
+
+if __package__:
+    from . import rutas
+else:
+    import rutas
 
 class OAuthHandler(BaseHTTPRequestHandler):
 
@@ -43,6 +51,171 @@ class OAuthHandler(BaseHTTPRequestHandler):
             self.send_response(400)
             self.end_headers()
 
+# Una fila por actividad de Strava. id = identificador interno de la tabla; StravaID = id de la
+# actividad en Strava (único: al sincronizar otra vez se actualiza la fila en vez de duplicarla).
+# Unidades: distancia km, altimetria m, duracion horas (tiempo en movimiento), velocidad_media km/h.
+SQL_CREAR_ACTIVIDADES = """CREATE TABLE IF NOT EXISTS ActividadesStrava (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    StravaID INTEGER NOT NULL UNIQUE,
+    tipo TEXT,
+    Modalidad TEXT CHECK (Modalidad IN ('MTB', 'Gravel', 'Road')),
+    fecha TEXT,
+    distancia FLOAT,
+    altimetria FLOAT,
+    duracion FLOAT,
+    velocidad_media FLOAT,
+    tipo_vehiculo TEXT,
+    elemento TEXT,
+    user TEXT
+)"""
+
+
+COLUMNAS_DATOS_ACTIVIDADES = "tipo, distancia, altimetria, duracion, velocidad_media, tipo_vehiculo, elemento, user"
+COLUMNAS_DATOS_ACTIVIDADES_SIN_TIPO = COLUMNAS_DATOS_ACTIVIDADES.removeprefix("tipo, ")
+# Orden de las columnas tal y como las crea SQL_CREAR_ACTIVIDADES
+COLUMNAS_ACTIVIDADES_EN_ORDEN = re.findall(r"^\s{4}(\w+) ", SQL_CREAR_ACTIVIDADES, flags=re.MULTILINE)
+
+
+def asegurarTablaActividades(conexion) -> None:
+    """Crea ActividadesStrava o, si es de la versión anterior (sin StravaID, con el id de Strava
+    como clave), la migra: el id antiguo pasa a StravaID y id se renumera como id interno."""
+    columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(ActividadesStrava)")}
+    if columnas and "StravaID" not in columnas:
+        logging.info("Migrando ActividadesStrava: se añade la columna StravaID")
+        try:
+            conexion.execute("ALTER TABLE ActividadesStrava RENAME TO ActividadesStrava_antigua")
+            conexion.execute(SQL_CREAR_ACTIVIDADES)
+            conexion.execute(f"""INSERT INTO ActividadesStrava (StravaID, {COLUMNAS_DATOS_ACTIVIDADES})
+                                 SELECT id, {COLUMNAS_DATOS_ACTIVIDADES} FROM ActividadesStrava_antigua ORDER BY id""")
+            conexion.execute("DROP TABLE ActividadesStrava_antigua")
+        except sqlite3.Error:
+            conexion.rollback()
+            raise
+    else:
+        conexion.execute(SQL_CREAR_ACTIVIDADES)
+    columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(ActividadesStrava)")}
+    orden = [fila[1] for fila in conexion.execute("PRAGMA table_info(ActividadesStrava)")]
+    extra = [c for c in orden if c not in COLUMNAS_ACTIVIDADES_EN_ORDEN]
+    if extra:
+        logging.warning("ActividadesStrava tiene columnas propias %s: no se reordena para no perderlas", extra)
+    elif orden != COLUMNAS_ACTIVIDADES_EN_ORDEN:
+        # ALTER TABLE solo añade al final: se rehace la tabla para dejar las columnas en su sitio
+        # (Modalidad tras tipo, fecha tras Modalidad) conservando las filas. Una columna nueva queda
+        # a NULL en las actividades ya cargadas hasta el próximo Strava Sync.
+        logging.info("Migrando ActividadesStrava: se reordenan las columnas %s -> %s", orden, COLUMNAS_ACTIVIDADES_EN_ORDEN)
+        comunes = ", ".join(c for c in COLUMNAS_ACTIVIDADES_EN_ORDEN if c in columnas)
+        try:
+            conexion.execute("ALTER TABLE ActividadesStrava RENAME TO ActividadesStrava_antigua")
+            conexion.execute(SQL_CREAR_ACTIVIDADES)
+            conexion.execute(f"INSERT INTO ActividadesStrava ({comunes}) "
+                             f"SELECT {comunes} FROM ActividadesStrava_antigua ORDER BY id")
+            conexion.execute("DROP TABLE ActividadesStrava_antigua")
+        except sqlite3.Error:
+            conexion.rollback()
+            raise
+    conexion.commit()
+
+
+def quitarActividadesDuplicadas(conexion) -> int:
+    """Borra de ActividadesStrava las filas con el mismo StravaID y el mismo usuario, dejando
+    solo la de id menor. Devuelve cuántas filas se han borrado."""
+    cursor = conexion.execute("""DELETE FROM ActividadesStrava WHERE id NOT IN (
+                                     SELECT MIN(id) FROM ActividadesStrava GROUP BY StravaID, user)""")
+    conexion.commit()
+    borradas = cursor.rowcount
+    if borradas:
+        logging.warning("Borradas %d actividades duplicadas de ActividadesStrava", borradas)
+    else:
+        logging.info("ActividadesStrava sin actividades duplicadas")
+    return borradas
+
+
+# Actividades sin bici ni otro vehículo: se guardan con tipo_vehiculo = NULL
+TIPOS_SIN_VEHICULO = {"run", "walk"}
+
+
+# Modalidad de bici según el sport_type de Strava ('type' dice 'Ride' para las tres). Cualquier otro
+# deporte (Run, Walk, Workout, VirtualRide...) se guarda con Modalidad NULL.
+MODALIDADES = {
+    "MountainBikeRide": "MTB",      # Bicicleta de montaña
+    "EMountainBikeRide": "MTB",     # Bicicleta de montaña eléctrica
+    "GravelRide": "Gravel",         # Bicicleta de gravilla
+    "Ride": "Road",                 # Bicicleta de carretera
+    "EBikeRide": "Road",            # Bicicleta eléctrica
+}
+
+
+def modalidad_actividad(actividad):
+    """'MTB', 'Gravel', 'Road' o None. Si Strava no trae sport_type se usa type ('Ride' -> 'Road')."""
+    deporte = _texto(getattr(actividad, "sport_type", None)) or _texto(getattr(actividad, "type", None))
+    return MODALIDADES.get(deporte)
+
+
+# Vehículo que se guarda según la modalidad, sea cual sea el vehículo del usuario (nombres de tipo_vehiculo)
+VEHICULO_POR_MODALIDAD = {"MTB": "Bici MTB"}
+
+
+def vehiculo_actividad(actividad, modalidad, tipo_vehiculo):
+    """tipo_vehiculo de la actividad: NULL en Run/Walk; 'Bici MTB' si la modalidad es MTB; si no, el del usuario."""
+    if (_texto(actividad.type) or "").lower() in TIPOS_SIN_VEHICULO:
+        return None
+    return VEHICULO_POR_MODALIDAD.get(modalidad, tipo_vehiculo)
+
+
+# Ficheros de la conexión con Strava: dentro de la carpeta de la app (…/com.SkullWithGasMask/BikeCFU, ver
+# rutas.py), junto a la BD y el log
+CARPETA_APP = rutas.CARPETA_APP
+FICHERO_TOKENS = "strava_tokens.json"
+FICHERO_SECRETOS = "client_secrets.txt"
+
+# Permisos que se piden a Strava al autorizar. profile:read_all hace que /athlete incluya las bicis;
+# activity:read_all incluye también las actividades privadas.
+SCOPE_STRAVA = "read,activity:read_all,profile:read_all"
+
+# frame_type de las bicis de Strava -> Modalidad
+MODALIDAD_POR_FRAME_TYPE = {1: "MTB", 2: "Gravel", 3: "Road", 4: "Road", 5: "Gravel"}   # 2 = ciclocross, 4 = contrarreloj
+
+
+def _fecha_actividad(actividad):
+    """Día de la actividad en hora local ('YYYY-MM-DD'), o None si Strava no la trae."""
+    fecha = getattr(actividad, "start_date_local", None) or getattr(actividad, "start_date", None)
+    return _dia(fecha) if fecha else None
+
+
+def _dia(fecha) -> str:
+    """datetime/date/'2026-11-04 12:46:32' -> '2026-11-04' (stravaValores guarda una fila por día)."""
+    if isinstance(fecha, datetime):
+        return fecha.date().isoformat()
+    if hasattr(fecha, "isoformat"):
+        return fecha.isoformat()
+    return str(fecha)[:10]
+
+
+def asegurarStravaValoresSinDuplicados(conexion) -> None:
+    """Deja stravaValores con una sola fila por (día, tipo) y lo garantiza con un índice único.
+
+    Antes cada sincronización añadía una fila nueva con fecha y hora, y varias sincronizaciones
+    el mismo día duplicaban el resumen. Se conserva la fila más reciente de cada día (la de id
+    mayor). Es idempotente: se puede llamar en cada arranque.
+    """
+    conexion.execute("""DELETE FROM stravaValores WHERE id NOT IN (
+                            SELECT MAX(id) FROM stravaValores GROUP BY date(fecha), tipo)""")
+    conexion.execute("UPDATE stravaValores SET fecha = date(fecha) WHERE fecha <> date(fecha)")
+    conexion.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_stravaValores_fecha_tipo ON stravaValores (fecha, tipo)")
+    conexion.commit()
+
+
+def _texto(valor):
+    """RelaxedActivityType('Ride') -> 'Ride'; None se mantiene."""
+    if valor is None:
+        return None
+    return str(getattr(valor, "root", valor))
+
+
+def _numero(valor, factor=1.0, decimales=2):
+    return None if valor is None else round(float(valor) * factor, decimales)
+
+
 class StravaData:
     contador = 0
     contador2 = 0
@@ -64,24 +237,58 @@ class StravaData:
     cursor = 0
 
     # Constructor: inicializa atributos (características)
-    def __init__(self, app):
+    def __init__(self, app, conexion_propia=False):
+        """conexion_propia=True abre una conexión nueva a la BD de la app. Es obligatorio cuando
+        StravaData se usa en un hilo distinto al de la interfaz (sqlite3 no permite compartir una
+        conexión entre hilos)."""
         self.app = app
         self.contador = 0
         self.contador2 = 0
+        self.actividades = []
+        self._equipos = {}   # gear_id -> nombre, para no consultar Strava en cada actividad
+        self._detalles_equipo = {}   # gear_id -> DetailedGear (o None si falló)
+        self.bicis_del_perfil = False   # True si las bicis vienen del perfil del atleta (lista completa)
 
         # Misma BD que la app (BikeCFU/dbbcfu.db). Antes se abría paths.data/dbbcfu.db, otro
         # fichero distinto: SQLite lo creaba vacío y fallaba con "no such table: stravaValores".
-        file_pathDB = getattr(app, "db_path", None) or Path(app.paths.data) / "BikeCFU" / "dbbcfu.db"
-        Path(file_pathDB).parent.mkdir(parents=True, exist_ok=True)
-        self.sqliteConnection = sqlite3.connect(file_pathDB)
+        # Si la app ya tiene la BD abierta se reutiliza su conexión: con una segunda conexión al
+        # mismo fichero, cualquier cambio sin confirmar de la app provoca "database is locked".
+        conexion = getattr(app, "sqliteConnection", None)
+        self._conexion_propia = conexion_propia or not isinstance(conexion, sqlite3.Connection)
+        if not self._conexion_propia:
+            self.sqliteConnection = conexion
+        else:
+            file_pathDB = getattr(app, "db_path", None) or rutas.carpeta_app(app.paths.data) / "dbbcfu.db"
+            Path(file_pathDB).parent.mkdir(parents=True, exist_ok=True)
+            self.sqliteConnection = sqlite3.connect(file_pathDB, timeout=15)
+            logging.info("Successfully Connected to SQLite: %s", file_pathDB)
         self.cursor = self.sqliteConnection.cursor()
-        logging.info("Successfully Connected to SQLite: %s", file_pathDB)
+
+    def cerrar(self) -> None:
+        """Cierra la conexión solo si la abrió StravaData (la de la app la cierra la app)."""
+        if self._conexion_propia:
+            self.sqliteConnection.close()
 
     # Open the secrets file and store the client ID and client secret as objects, separated by a comma
     # Read below to learn how to set up the app that provides you with the client ID
     # and the client secret
-    def initConexion(self):   
-        file_path = self.app.paths.data / "client_secrets.txt" 
+    def ruta_fichero(self, nombre):
+        """<paths.data>/BikeCFU/<nombre>. Si el fichero aún está en la ubicación antigua (paths.data/<nombre>)
+        y no en BikeCFU, se copia a BikeCFU; el antiguo no se borra."""
+        base = rutas.raiz_datos(self.app.paths.data)     # sin la subcarpeta "Data" de Toga 0.5.7
+        carpeta = base / CARPETA_APP
+        carpeta.mkdir(parents=True, exist_ok=True)
+        ruta, antigua = carpeta / nombre, base / nombre
+        if not ruta.exists() and antigua.is_file():
+            try:
+                shutil.copy2(antigua, ruta)
+                logging.info("%s copiado de %s a %s", nombre, base, carpeta)
+            except OSError as error:
+                logging.warning("No se pudo copiar %s a %s: %s", nombre, carpeta, error)
+        return ruta
+
+    def initConexion(self):
+        file_path = self.ruta_fichero(FICHERO_SECRETOS)
         print("Ruta dentro StravaData: ", file_path)
         if file_path.exists():
             with open(file_path, "r", encoding="utf-8") as f:
@@ -129,7 +336,7 @@ class StravaData:
             f"?client_id={client_id}"
             f"&response_type=code"
             f"&redirect_uri=http://127.0.0.1:5000"
-            f"&scope=activity:read"
+            f"&scope={SCOPE_STRAVA}"
         )
 
         # abrir navegador
@@ -226,7 +433,7 @@ class StravaData:
             logging.error("Respuesta de Strava sin tokens válidos; no se guarda: %s",
                           {k: v for k, v in (tokens or {}).items() if "token" not in k})
             return False
-        file_path = self.app.paths.data / "strava_tokens.json"
+        file_path = self.ruta_fichero(FICHERO_TOKENS)
         with open(file_path, "w") as f:
             json.dump(tokens, f)
             f.flush()
@@ -244,7 +451,7 @@ class StravaData:
         return tokens if self.save_tokens(tokens) else None
 
     def load_tokens(self):
-        file_path = self.app.paths.data / "strava_tokens.json"
+        file_path = self.ruta_fichero(FICHERO_TOKENS)
         try:
             with open(file_path) as f:
                 return json.load(f)
@@ -357,7 +564,7 @@ class StravaData:
 
     def chequearDatosBDD(self, fecha) -> bool:
         try:
-            self.cursor.execute("SELECT * FROM stravaValores sv WHERE sv.fecha = ?", (fecha,))
+            self.cursor.execute("SELECT * FROM stravaValores sv WHERE sv.fecha = ?", (_dia(fecha),))
             rows = self.cursor.fetchall()
         except sqlite3.Error as error:
             logging.error("Error al consultar stravaValores: %s", error)
@@ -394,7 +601,8 @@ class StravaData:
   
         return True
 
-    def extraerDatos(self, fecha1, fecha2, tipoActividad="Ride"):
+    def extraerDatos(self, fecha1, fecha2, tipoActividad="Ride", progreso=None):
+        """Descarga las actividades entre fecha1 y fecha2. progreso(n) se llama tras cada una."""
         self.fecha_referencia = fecha1
         self.fecha_objetivo = fecha2
         print("Fecha Referencia: ", self.fecha_referencia)
@@ -409,9 +617,13 @@ class StravaData:
         self.total_desnivel2 = 0
         self.contador = 0
         self.contador2 = 0
+        self.actividades = []   # todas las descargadas, para ActividadesStrava
 
         for actividad in self.client.get_activities(after=self.fecha_referencia, before=self.fecha_objetivo):
-            if actividad.type == tipoActividad: 
+            self.actividades.append(actividad)
+            if progreso:
+                progreso(len(self.actividades))
+            if actividad.type == tipoActividad:
                 self.total_distancia += actividad.distance  # metros
                 self.total_tiempo += actividad.moving_time
                 self.total_desnivel += actividad.total_elevation_gain
@@ -436,21 +648,159 @@ class StravaData:
         print("Tiempo (horas):", math.trunc(self.total_tiempo / 3600))
         print("Desnivel (m):", math.trunc(self.total_desnivel))
 
-    def guardarDatosBDD(self, fecha):
-        # Meter los datos extraídos en base de datos.
-        print("Dentro de guardado datos Strava en BDD")
+    def crearTablaActividades(self) -> bool:
         try:
-            self.cursor.execute("INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas) VALUES (?, ?, ?, ?, ?, ?)", (fecha, math.trunc(self.total_distancia/ 1000), 
-                math.trunc(self.total_desnivel), "bike", self.total_actividades, math.trunc(self.total_tiempo / 3600)))
-            
+            asegurarTablaActividades(self.sqliteConnection)
+            return True
+        except sqlite3.Error as error:
+            logging.error("Error al crear la tabla ActividadesStrava: %s", error)
+            return False
+
+    def nombreEquipo(self, gear_id):
+        """Nombre de la bici/equipo de Strava (se consulta una vez por gear_id). Si falla, el propio id."""
+        if not gear_id:
+            return None
+        cache = self._equipos
+        if gear_id not in cache:
+            detalle = self.detalleEquipo(gear_id)
+            cache[gear_id] = getattr(detalle, "name", None) or gear_id
+        return cache[gear_id]
+
+    def detalleEquipo(self, gear_id):
+        """DetailedGear de Strava (una consulta por gear_id); None si falla."""
+        if gear_id not in self._detalles_equipo:
+            try:
+                self._detalles_equipo[gear_id] = self.client.get_gear(gear_id)
+            except Exception as error:   # red, permisos o equipo borrado: no debe parar la carga
+                logging.warning("No se pudo obtener el equipo %s de Strava: %s", gear_id, error)
+                self._detalles_equipo[gear_id] = None
+        return self._detalles_equipo[gear_id]
+
+    def bicicletas(self):
+        """Bicis del atleta: lista de dicts con id, nombre, marca, modelo, modalidad y principal.
+
+        Salen del perfil del atleta (get_athlete().bikes, necesita el permiso profile:read_all) y, además, del
+        equipo de las actividades descargadas (gear_id que empieza por 'b'; los 'g' son zapatillas). Así se
+        obtienen aunque el token solo tenga activity:read. bicis_del_perfil indica si el perfil trajo la lista
+        (entonces es completa y se pueden marcar como retiradas las demás). None si no hay forma de saberlas."""
+        try:
+            del_perfil = list(self.client.get_athlete().bikes or [])
+        except Exception as error:   # red o token
+            logging.warning("No se pudieron leer las bicis del perfil de Strava: %s", error)
+            del_perfil = None
+        self.bicis_del_perfil = bool(del_perfil)
+        if del_perfil == []:
+            logging.info("El perfil de Strava no trae bicis (¿falta el permiso profile:read_all?): "
+                         "se toman del equipo de las actividades")
+
+        # Modalidades de las actividades de cada bici (para las que Strava no da frame_type)
+        uso = {}
+        for actividad in self.actividades:
+            gear_id = getattr(actividad, "gear_id", None)
+            if gear_id and str(gear_id).startswith("b"):
+                uso.setdefault(gear_id, Counter())[modalidad_actividad(actividad)] += 1
+
+        perfil = {bici.id: bici for bici in del_perfil or []}
+        ids = list(perfil) + [gear_id for gear_id in uso if gear_id not in perfil]
+        if del_perfil is None and not ids:
+            return None
+
+        resultado = []
+        for gear_id in ids:
+            detalle = self.detalleEquipo(gear_id)
+            en_perfil = perfil.get(gear_id)
+            nombre = getattr(en_perfil, "name", None) or getattr(detalle, "name", None)
+            if nombre:
+                self._equipos[gear_id] = nombre       # así nombreEquipo no vuelve a pedirla
+            modalidad = MODALIDAD_POR_FRAME_TYPE.get(getattr(detalle, "frame_type", None))
+            if modalidad is None:
+                usadas = [(n, m) for m, n in uso.get(gear_id, Counter()).items() if m]
+                modalidad = max(usadas)[1] if usadas else None
+            resultado.append({
+                "id": gear_id,
+                "nombre": nombre,
+                "marca": getattr(detalle, "brand_name", None),
+                "modelo": getattr(detalle, "model_name", None),
+                "modalidad": modalidad,
+                "principal": bool(getattr(en_perfil, "primary", False) or getattr(detalle, "primary", False)),
+            })
+        logging.info("Bicis de Strava: %s", [(b["nombre"], b["modalidad"]) for b in resultado])
+        return resultado
+
+    def guardarActividadesBDD(self, usuario, tipo_vehiculo=None, actividades=None, progreso=None) -> int:
+        """Guarda (o actualiza si ya existían) las actividades en ActividadesStrava. Devuelve cuántas.
+
+        progreso(actual, total) se llama tras preparar cada actividad (incluye pedir a Strava el
+        nombre de la bici, que es la parte lenta)."""
+        actividades = [a for a in (self.actividades if actividades is None else actividades) if a.id is not None]
+        filas = []
+        for numero, actividad in enumerate(actividades, start=1):
+            modalidad = modalidad_actividad(actividad)
+            filas.append((
+                actividad.id,                                           # -> StravaID
+                _texto(actividad.type),
+                modalidad,                                              # MTB / Gravel / Road / NULL
+                _numero(actividad.distance, 1 / 1000),                  # m -> km
+                _numero(actividad.total_elevation_gain, 1, 1),          # m
+                _numero(actividad.moving_time, 1 / 3600, 3),            # s -> h
+                _numero(actividad.average_speed, 3.6),                  # m/s -> km/h
+                vehiculo_actividad(actividad, modalidad, tipo_vehiculo),
+                self.nombreEquipo(getattr(actividad, "gear_id", None)),
+                usuario,
+                _fecha_actividad(actividad),                            # 'YYYY-MM-DD' (hora local)
+            ))
+            if progreso:
+                progreso(numero, len(actividades))
+        if not self.crearTablaActividades():
+            return 0
+        try:
+            self.cursor.executemany(
+                f"""INSERT INTO ActividadesStrava (StravaID, tipo, Modalidad, {COLUMNAS_DATOS_ACTIVIDADES_SIN_TIPO}, fecha)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(StravaID) DO UPDATE SET
+                       tipo = excluded.tipo, distancia = excluded.distancia, altimetria = excluded.altimetria,
+                       duracion = excluded.duracion, velocidad_media = excluded.velocidad_media,
+                       tipo_vehiculo = excluded.tipo_vehiculo, elemento = excluded.elemento, user = excluded.user,
+                       fecha = COALESCE(excluded.fecha, ActividadesStrava.fecha),
+                       Modalidad = excluded.Modalidad""",
+                filas,
+            )
             self.sqliteConnection.commit()
-            
-            if self.cursor.rowcount > 0:
-                print("Registro insertado correctamente")
-                logging.info("Registro insertado correctamente")
-            else:
-                print("No se insertó ningún registro")
-                logging.warning("No se insertó ningún registro")
-        except sqlite3.Error as error: 
+        except sqlite3.Error as error:
+            self.sqliteConnection.rollback()
+            logging.error("Error al guardar en ActividadesStrava: %s", error)
+            return 0
+        logging.info("Guardadas %d actividades de Strava de %s", len(filas), usuario)
+        return len(filas)
+
+    def quitarActividadesDuplicadas(self) -> int:
+        try:
+            return quitarActividadesDuplicadas(self.sqliteConnection)
+        except sqlite3.Error as error:
+            self.sqliteConnection.rollback()
+            logging.error("Error al quitar actividades duplicadas: %s", error)
+            return 0
+
+    def guardarDatosBDD(self, fecha) -> bool:
+        """Guarda el resumen en stravaValores. Una fila por día y tipo: si ya había una (otra
+        sincronización el mismo día) se actualiza en vez de duplicarla."""
+        fila = (_dia(fecha), math.trunc(self.total_distancia / 1000), math.trunc(self.total_desnivel), "bike",
+                self.total_actividades, math.trunc(self.total_tiempo / 3600))
+        try:
+            asegurarStravaValoresSinDuplicados(self.sqliteConnection)
+            self.cursor.execute(
+                """INSERT INTO stravaValores (fecha, valor, ascenso, tipo, num_actividades, horas)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(fecha, tipo) DO UPDATE SET
+                       valor = excluded.valor, ascenso = excluded.ascenso,
+                       num_actividades = excluded.num_actividades, horas = excluded.horas""",
+                fila,
+            )
+            self.sqliteConnection.commit()
+        except sqlite3.Error as error:
+            self.sqliteConnection.rollback()
             print("Error al insertar en stravaValores:", error)
             logging.error("Error al insertar en stravaValores: %s", error)
+            return False
+        logging.info("Resumen de Strava guardado para %s", fila[0])
+        return True
