@@ -139,8 +139,9 @@ def test_menu_volver_abajo_izquierda_y_strava_sync_a_la_derecha(en_menu):
     barra = barra_inferior(en_menu.main_window.content)
     assert isinstance(barra.children[0], toga.Button)
     assert barra.children[0].text == "◀ Volver"
-    derecha = barra.children[-1]
-    assert [b.text for b in derecha.children] == ["Hist Taller", "Strava Sync"], "Hist Taller junto a Strava Sync"
+    assert isinstance(barra.children[-1], toga.Button)
+    assert barra.children[-1].text == "Strava Sync"
+    assert "Histórico Taller" not in textos_botones(en_menu.main_window.content), "Está en Estadísticas"
 
 
 def test_menu_tamano_botones(en_menu):
@@ -1393,7 +1394,7 @@ def test_el_coste_se_vacia_tras_guardar_y_al_volver_a_entrar(cuadricula, db):
     assert cuadricula.coste_paso_taller == ""
 
 
-# ---- Hist Taller: historial de pasos por taller ----
+# ---- Histórico Taller: historial de pasos por taller ----
 
 def registrar_paso(app, fecha, modalidad="MTB", coste=None, elementos=("cadena",)):
     componentes = [dict(fecha=fecha, elemento=e, descripcion=None, marca="", distancia=2000, tiempo=500, meses=None,
@@ -1407,11 +1408,18 @@ def historial(en_menu):
     registrar_paso(en_menu, "2026-09-15", "MTB", 125.5, ("Cubiertas", "pastillas freno"))
     registrar_paso(en_menu, "2026-06-10", "Gravel", None, ("Plato",))
     en_menu.ir_a_menu_usuario()
-    pulsar(en_menu, "Hist Taller")
+    pulsar(en_menu, "Estadísticas")
+    pulsar(en_menu, "Histórico Taller")
     return en_menu
 
 
-def test_hist_taller_abre_su_pantalla(historial):
+def test_historico_taller_esta_en_estadisticas_con_los_otros_botones(en_menu):
+    pantalla = pulsar(en_menu, "Estadísticas")
+    derecha = barra_inferior(pantalla).children[-1]
+    assert [b.text for b in derecha.children] == ["Cambio Mecánico", "+ Límite Alerta", "Histórico Taller"]
+
+
+def test_historico_taller_abre_su_pantalla(historial):
     pantalla = historial.main_window.content
     assert "Historial de pasos por taller" in textos_labels(pantalla)
     assert historial.tablaHistorialTaller in widgets(pantalla)
@@ -1437,20 +1445,23 @@ def test_lapiz_en_la_ultima_columna_de_cada_fila(historial):
 
 
 def test_historial_vacio(en_menu):
-    pulsar(en_menu, "Hist Taller")
+    pulsar(en_menu, "Estadísticas")
+    pulsar(en_menu, "Histórico Taller")
     assert "Aún no hay pasos por taller." in textos_labels(en_menu.main_window.content)
     assert en_menu.tablaHistorialTaller.data == []
 
 
 def test_historial_solo_del_usuario(en_menu):
     en_menu.db.registrarPasoTaller("otro", "2026-01-01", "Road", [], None)
-    pulsar(en_menu, "Hist Taller")
+    pulsar(en_menu, "Estadísticas")
+    pulsar(en_menu, "Histórico Taller")
     assert en_menu.tablaHistorialTaller.data == []
 
 
-def test_volver_del_historial_al_menu(historial):
+def test_volver_del_historial_a_estadisticas(historial):
     pantalla = pulsar(historial, "◀ Volver")
-    assert "Hist Taller" in textos_botones(pantalla)
+    assert historial.tabla in widgets(pantalla)
+    assert "Histórico Taller" in textos_botones(pantalla)
 
 
 def test_lapiz_abre_la_edicion_del_paso(historial):
@@ -1507,9 +1518,47 @@ def test_volver_de_la_edicion_al_historial_sin_cambios(historial, db):
     assert db.execute("SELECT * FROM PasosTaller ORDER BY id").fetchall() == antes
 
 
-def test_hist_taller_traducido(en_menu):
+def test_historico_taller_traducido(en_menu):
     translations.set_language("en")
     en_menu.ir_a_menu_usuario()
-    pantalla = pulsar(en_menu, "Workshop Hist")
+    pulsar(en_menu, "Statistics")
+    pantalla = pulsar(en_menu, "Workshop History")
     assert "Workshop visit history" in textos_labels(pantalla)
 
+
+
+# ---- Gastos de taller debajo del historial ----
+
+def test_gastos_debajo_del_historial(historial):
+    contenido = historial.tablaHistorialTaller.parent
+    hijos = contenido.children
+    assert hijos.index(historial.tablaGastosTaller.parent) > hijos.index(historial.tablaHistorialTaller)
+    assert "Gastos de taller (€)" in textos_labels(historial.main_window.content)
+
+
+def test_gasto_total_y_por_modalidad(historial):
+    # pasos del fixture: 2026-03-01 Road 40 €, 2026-09-15 MTB 125,50 €, 2026-06-10 Gravel sin coste
+    assert historial.label_gasto_total.text == "Total gastado: 165,50 €"
+    assert historial.label_gasto_por_modalidad.text == "Road: 40,00 €  ·  MTB: 125,50 €  ·  Gravel: 0,00 €"
+
+
+def test_tabla_de_gastos_por_anio(historial):
+    registrar_paso(historial, "2025-05-05", "Gravel", 60, ("cadena",))
+    historial.ir_a_historial_taller()
+    tabla = historial.tablaGastosTaller
+    assert [w.text for w in tabla.cabecera.children] == ["Año ▼", "Road", "MTB", "Gravel", "Total"]
+    filas = [(f.anio, f.road, f.mtb, f.gravel, f.total) for f in tabla.data]
+    assert filas == [(2026, "40,00", "125,50", "0,00", "165,50"), (2025, "—", "—", "60,00", "60,00")]
+
+
+def test_los_gastos_se_actualizan_al_editar_un_paso(historial):
+    lapiz(historial.tablaHistorialTaller.filas_box[0])._impl.simulate_press()   # el de MTB, 125,50 €
+    historial.entrada_coste_paso.value = "100"
+    pulsar(historial, "Guardar")
+    assert historial.label_gasto_total.text == "Total gastado: 140,00 €"
+
+
+def test_sin_pasos_no_hay_gastos(en_menu):
+    pulsar(en_menu, "Estadísticas")
+    pantalla = pulsar(en_menu, "Histórico Taller")
+    assert "Gastos de taller (€)" not in textos_labels(pantalla)

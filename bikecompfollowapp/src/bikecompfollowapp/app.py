@@ -80,8 +80,13 @@ COLUMNAS_COMPONENTES = [
     ("col.activo", "activo", 70),
 ]
 TAMANO_VENTANA_RESUMEN = (900, 640)
+ALTO_TABLA_COMPONENTES = 12 * tabla_filas.ALTO_FILA + 2   # 12 filas a la vista; el resto, con scroll
 TAMANO_VENTANA_HISTORIAL = (820, 600)
-# Tabla de Hist Taller: (clave de la cabecera, atributo, ancho); la última columna es el ✏️
+# Gastos de taller por año (filas) y modalidad (columnas); SIN_GASTO: modalidad sin pasos por taller ese año
+COLUMNAS_GASTOS_TALLER = [("col.anio", "anio", 80), ("col.road", "road", 110), ("col.mtb", "mtb", 110),
+                          ("col.gravel", "gravel", 110), ("col.total", "total", 110)]
+SIN_GASTO = "—"
+# Tabla de Histórico Taller: (clave de la cabecera, atributo, ancho); la última columna es el ✏️
 COLUMNAS_HISTORIAL_TALLER = [("col.fecha", "fecha", 110), ("col.modalidad", "modalidad", 95),
                              ("col.componentes", "componentes", 340), ("col.coste", "coste_texto", 100)]
 TAMANO_VENTANA_ESTADISTICAS = (920, 900)   # la tabla de componentes con ✏️ mide unos 880 de ancho
@@ -483,16 +488,13 @@ class BikeCompFollowApp(toga.App):
             style=Pack(direction=COLUMN, align_items=CENTER),
         )
 
-        self.boton_hist_taller = self._boton(t("menu.hist_taller"), self.ir_a_historial_taller)
         barra_inferior = self._barra_inferior(
             izquierda=self._boton_volver(self.volver_pantalla_inicial),
-            derecha=toga.Box(children=[self.boton_hist_taller,
-                                       self._boton(t("menu.strava"), self.ir_a_pantalla_recoleccionDatos)],
-                             style=Pack(direction=ROW)),
+            derecha=self._boton(t("menu.strava"), self.ir_a_pantalla_recoleccionDatos),
         )
         return self._pantalla(contenido, barra_inferior)
 
-    # -------- Hist Taller: pasos por taller del usuario (el más reciente primero) --------
+    # -------- Histórico Taller (desde Estadísticas): pasos por taller del usuario, el más reciente primero --------
     def ir_a_historial_taller(self, widget=None):
         self._mostrar(self.construir_historial_taller())
         self.agrandar_ventana(*TAMANO_VENTANA_HISTORIAL)
@@ -518,10 +520,40 @@ class BikeCompFollowApp(toga.App):
         ], style=Pack(direction=COLUMN))
         if not filas:
             contenido.add(toga.Label(t("hist.vacio"), style=Pack(margin_top=ESPACIO)))
+        else:
+            contenido.add(self.construir_gastos_taller(usuario))
         main_box = toga.Box(style=Pack(direction=COLUMN, margin=10))
         main_box.add(toga.ScrollContainer(content=contenido, style=Pack(flex=1)))
-        main_box.add(self._barra_inferior(izquierda=self._boton_volver(self.ir_a_menu_usuario)))
+        main_box.add(self._barra_inferior(izquierda=self._boton_volver(self.volver_a_estadisticas)))
         return main_box
+
+    def construir_gastos_taller(self, usuario):
+        """Debajo del historial: gasto total, total por modalidad y una tabla por año (filas) y modalidad
+        (columnas), con el total de cada año."""
+        gastos = self.db.gastosTaller(usuario)
+        por_modalidad = {m: sum(anio.get(m, 0) for anio in gastos.values()) for m in MODALIDADES_MANTENIMIENTO}
+        total = sum(por_modalidad.values())
+        filas = []
+        for anio, de_anio in gastos.items():
+            fila = {"anio": anio, "total": formatear_coste(sum(de_anio.values()))}
+            for modalidad in MODALIDADES_MANTENIMIENTO:
+                fila[modalidad.lower()] = formatear_coste(de_anio[modalidad]) if modalidad in de_anio else SIN_GASTO
+            filas.append(fila)
+        self.label_gasto_total = toga.Label(
+            t("hist.gasto_total", total=formatear_coste(total)), style=Pack(font_size=15, font_weight="bold"))
+        self.label_gasto_por_modalidad = toga.Label(
+            "  ·  ".join(f"{m}: {formatear_coste(por_modalidad[m])} €" for m in MODALIDADES_MANTENIMIENTO),
+            style=Pack(margin_bottom=ESPACIO))
+        self.tablaGastosTaller = tabla_filas.TablaFilas(
+            _columnas_filas(COLUMNAS_GASTOS_TALLER), data=filas,
+            orden=("anio", True),           # el año más reciente arriba
+            style=Pack(direction=COLUMN))
+        return toga.Box(children=[
+            toga.Label(t("hist.gastos_titulo"), style=Pack(font_size=16, margin_top=25, margin_bottom=ESPACIO)),
+            self.label_gasto_total,
+            self.label_gasto_por_modalidad,
+            self.tablaGastosTaller,
+        ], style=Pack(direction=COLUMN))
 
     def boton_editar_paso_taller(self, fila):
         return toga.Button(ICONO_EDITAR, on_press=lambda widget, id_=fila.id: self.editar_paso_taller(id_),
@@ -1128,6 +1160,8 @@ class BikeCompFollowApp(toga.App):
             on_select=self.actualizar_limites_componente_seleccionado,
             accion=self.boton_editar_componente,
             titulo_accion=t("col.editar"),
+            # un juego de componentes por bici: con muchas filas, la tabla hace scroll por dentro
+            alto_maximo=ALTO_TABLA_COMPONENTES,
             style=Pack(direction=COLUMN, flex=1),
         )
 
@@ -1192,6 +1226,8 @@ class BikeCompFollowApp(toga.App):
                     self.obtener_componente_seleccionado(),
                     self.componentes_disponibles,
                 )),
+                # Histórico Taller: pasos por taller del usuario; su Volver regresa a Estadísticas
+                self._boton(t("estadisticas.historico_taller"), self.ir_a_historial_taller),
             ],
             style=Pack(direction=COLUMN),
         )

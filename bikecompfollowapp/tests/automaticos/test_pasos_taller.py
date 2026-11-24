@@ -158,3 +158,19 @@ def test_actualizar_paso_taller_no_valido(app, db, modalidad, coste):
 def test_actualizar_paso_que_no_existe(app):
     assert app.db.actualizarPasoTaller(999, "2026-03-02", "Road", None) is False
     assert app.db.pasoTallerPorId(999) is None
+
+
+# ---- Gastos de taller por año y modalidad ----
+
+def test_gastos_taller_por_anio_y_modalidad(app):
+    app.db.registrarPasoTaller(USUARIO, "2025-04-01", "Road", [componente("cadena")], coste=50)
+    app.db.registrarPasoTaller(USUARIO, "2026-03-26", "MTB", [componente("Plato")], coste=300)
+    app.db.registrarPasoTaller(USUARIO, "2026-07-07", "Gravel", [componente("cadena")], coste=220)
+    app.db.registrarPasoTaller(USUARIO, "2026-09-01", "Gravel", [componente("Cubiertas")], coste=30.5)
+    app.db.registrarPasoTaller(USUARIO, "2026-10-01", "Gravel", [componente("Cámara")])          # sin coste
+    app.db.registrarPasoTaller("otro", "2026-01-01", "MTB", [componente("cadena")], coste=999)
+    assert app.db.gastosTaller(USUARIO) == {2025: {"Road": 50.0}, 2026: {"MTB": 300.0, "Gravel": 250.5}}
+
+
+def test_gastos_taller_sin_pasos(app):
+    assert app.db.gastosTaller(USUARIO) == {}

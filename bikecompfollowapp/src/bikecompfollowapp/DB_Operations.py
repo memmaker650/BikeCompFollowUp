@@ -340,6 +340,19 @@ def modalidadDeUsuario(conexion, usuario):
         return "Road"
 
 
+def modalidadesDeUsuario(conexion, usuario):
+    """Modalidades de todas las bicis del usuario, sin repetir: la de su vehículo (EntradasUsers) y las de sus
+    bicis activas de Strava (tabla Bicicletas), en el orden Road, MTB, Gravel."""
+    modalidades = {modalidadDeUsuario(conexion, usuario)}
+    try:
+        modalidades.update(fila[0] for fila in conexion.execute(
+            "SELECT DISTINCT modalidad FROM Bicicletas WHERE usuario = ? AND activa AND modalidad IS NOT NULL",
+            (usuario,)))
+    except sqlite3.Error:          # sin tabla Bicicletas (BD antigua): solo la del vehículo
+        pass
+    return [m for m in MODALIDADES_ESTADISTICAS if m in modalidades]
+
+
 # Columnas opcionales añadidas después -> su tipo: modelo del componente, otros (p. ej. velocidades de la
 # cadena) y el paso por taller en el que se cambió
 COLUMNAS_OPCIONALES_COMPONENTES = {"modelo": "TEXT", "otros": "TEXT",
@@ -395,7 +408,8 @@ def usuariosConNombre(conexion):
 
 
 def crearComponentesPorDefecto(conexion, usuario=None) -> int:
-    """Para cada componente de la tabla Componente que el usuario no tenga en archivoscomponentes
+    """Para cada componente de la tabla Componente y cada modalidad de las bicis del usuario
+    (modalidadesDeUsuario: p. ej. su gravel y su MTB) que el usuario no tenga en archivoscomponentes
     (sin distinguir mayúsculas), crea uno con descripción POR DEFECTO, fecha de alta FECHA_ALTA_POR_DEFECTO
     y los límites por defecto de ese componente (limitesPorDefecto); a los POR DEFECTO que ya existían les
     actualiza esos límites. usuario=None lo hace para todos los usuarios. Devuelve cuántos ha creado."""
@@ -405,21 +419,21 @@ def crearComponentesPorDefecto(conexion, usuario=None) -> int:
     creados = 0
     try:
         for nombre_usuario in usuarios:
-            modalidad = modalidadDeUsuario(conexion, nombre_usuario)   # la de su bici
-            faltan = [fila[0] for fila in conexion.execute(
-                """SELECT MIN(c.nombre) FROM Componente c
-                   WHERE trim(COALESCE(c.nombre, '')) <> ''
-                     AND NOT EXISTS (SELECT 1 FROM archivoscomponentes ac
-                                     WHERE ac.usuario = ? AND lower(ac.elemento) = lower(c.nombre)
-                                       AND ac.modalidad = ?)
-                   GROUP BY lower(c.nombre)""", (nombre_usuario, modalidad))]
-            conexion.executemany(
-                """INSERT INTO archivoscomponentes (usuario, elemento, modalidad, descripcion, fechaInsercion,
-                       distanciaLimite, tiempoLimite, mesesLimite, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)""",
-                [(nombre_usuario, nombre, modalidad, DESCRIPCION_POR_DEFECTO, FECHA_ALTA_POR_DEFECTO.isoformat(),
-                  *limitesComponente(conexion, nombre, nombre_usuario, modalidad)) for nombre in faltan],
-            )
-            creados += len(faltan)
+            for modalidad in modalidadesDeUsuario(conexion, nombre_usuario):   # una tanda por cada bici
+                faltan = [fila[0] for fila in conexion.execute(
+                    """SELECT MIN(c.nombre) FROM Componente c
+                       WHERE trim(COALESCE(c.nombre, '')) <> ''
+                         AND NOT EXISTS (SELECT 1 FROM archivoscomponentes ac
+                                         WHERE ac.usuario = ? AND lower(ac.elemento) = lower(c.nombre)
+                                           AND ac.modalidad = ?)
+                       GROUP BY lower(c.nombre)""", (nombre_usuario, modalidad))]
+                conexion.executemany(
+                    """INSERT INTO archivoscomponentes (usuario, elemento, modalidad, descripcion, fechaInsercion,
+                           distanciaLimite, tiempoLimite, mesesLimite, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                    [(nombre_usuario, nombre, modalidad, DESCRIPCION_POR_DEFECTO, FECHA_ALTA_POR_DEFECTO.isoformat(),
+                      *limitesComponente(conexion, nombre, nombre_usuario, modalidad)) for nombre in faltan],
+                )
+                creados += len(faltan)
             # Los POR DEFECTO aún no los ha definido el usuario: se les ponen los límites por defecto actuales
             existentes = conexion.execute(
                 "SELECT id, elemento, modalidad FROM archivoscomponentes WHERE usuario = ? AND descripcion = ?",
@@ -791,7 +805,7 @@ class BaseDatos:
     CAMPOS_HISTORIAL_TALLER = ("id", "fecha", "modalidad", "coste", "componentes", "num_componentes")
 
     def historialTaller(self, usuario):
-        """Pasos por taller del usuario para la pantalla Hist Taller, el más reciente primero: dicts con id, fecha,
+        """Pasos por taller del usuario para la pantalla Histórico Taller, el más reciente primero: dicts con id, fecha,
         modalidad, coste, componentes (nombres separados por comas) y num_componentes."""
         try:
             asegurarTablaPasosTaller(self.conexion)
@@ -807,6 +821,23 @@ class BaseDatos:
             logging.error("Error al leer el historial de taller de %s: %s", usuario, error)
             return []
         return [dict(zip(self.CAMPOS_HISTORIAL_TALLER, fila)) for fila in filas]
+
+    def gastosTaller(self, usuario):
+        """Gastos de taller del usuario por año y modalidad: {año: {modalidad: total}} (solo años y modalidades
+        con algún paso por taller; un paso sin coste cuenta como 0)."""
+        try:
+            asegurarTablaPasosTaller(self.conexion)
+            filas = self.conexion.execute(
+                """SELECT CAST(strftime('%Y', fecha) AS INTEGER), modalidad, sum(COALESCE(coste, 0))
+                   FROM PasosTaller WHERE usuario = ? AND date(fecha) IS NOT NULL
+                   GROUP BY 1, 2""", (usuario,)).fetchall()
+        except sqlite3.Error as error:
+            logging.error("Error al leer los gastos de taller de %s: %s", usuario, error)
+            return {}
+        gastos = {}
+        for anio, modalidad, total in filas:
+            gastos.setdefault(anio, {})[modalidad] = round(total, 2)
+        return gastos
 
     def pasoTallerPorId(self, id_paso):
         """Dict (id, usuario, fecha, modalidad, coste, componentes) de un paso por taller; None si no existe."""

@@ -200,3 +200,68 @@ def test_campo_modalidad_traducido(ui_usuario):
     ui_usuario.construir_pantalla_cinco(USUARIO)
     caja = ui_usuario.selection_modalidad.parent
     assert caja.children[0].children[0].text == "Type of ride: "
+
+
+# ---- Un juego de componentes POR DEFECTO por cada bici del usuario ----
+
+def bici(con, id_, modalidad, activa=1, usuario_=USUARIO):
+    con.execute("INSERT INTO Bicicletas (id, usuario, nombre, modalidad, activa) VALUES (?, ?, ?, ?, ?)",
+                (id_, usuario_, id_, modalidad, activa))
+    con.commit()
+
+
+def por_defecto(con, usuario_=USUARIO):
+    return con.execute("SELECT modalidad, count(*) FROM archivoscomponentes WHERE usuario = ? AND descripcion = ? "
+                       "GROUP BY modalidad ORDER BY modalidad", (usuario_, DESCRIPCION_POR_DEFECTO)).fetchall()
+
+
+def test_modalidades_de_usuario_suma_las_de_sus_bicis(con):
+    from bikecompfollowapp.DB_Operations import modalidadesDeUsuario
+    usuario(con, USUARIO, "Bici Gravel")
+    assert modalidadesDeUsuario(con, USUARIO) == ["Gravel"]
+    bici(con, "b1", "MTB")
+    bici(con, "b2", "Gravel")
+    bici(con, "b3", "Road", activa=0)            # retirada: no cuenta
+    bici(con, "b4", "Road", usuario_="otro")     # de otro usuario
+    assert modalidadesDeUsuario(con, USUARIO) == ["MTB", "Gravel"]
+
+
+def test_por_defecto_para_cada_bici(con):
+    usuario(con, USUARIO, "Bici Gravel")
+    bici(con, "b1", "Gravel")
+    bici(con, "b2", "MTB")
+    catalogo = con.execute("SELECT count(DISTINCT lower(nombre)) FROM Componente").fetchone()[0]
+    assert crearComponentesPorDefecto(con, USUARIO) == 2 * catalogo
+    assert por_defecto(con) == [("Gravel", catalogo), ("MTB", catalogo)]
+    assert crearComponentesPorDefecto(con, USUARIO) == 0, "No se duplican"
+
+
+def test_bici_nueva_anade_su_juego_sin_tocar_el_resto(con):
+    usuario(con, USUARIO, "Bici Gravel")
+    crearComponentesPorDefecto(con, USUARIO)
+    alta(con, "cadena", "Gravel", descripcion="KMC")
+    antes = con.execute("SELECT * FROM archivoscomponentes WHERE modalidad = 'Gravel' ORDER BY id").fetchall()
+    bici(con, "b2", "MTB")
+    crearComponentesPorDefecto(con, USUARIO)
+    assert con.execute("SELECT * FROM archivoscomponentes WHERE modalidad = 'Gravel' ORDER BY id").fetchall() == antes
+    catalogo = con.execute("SELECT count(DISTINCT lower(nombre)) FROM Componente").fetchone()[0]
+    assert ("MTB", catalogo) in por_defecto(con)
+
+
+def test_estadisticas_muestra_los_componentes_de_cada_bici(ui_usuario):
+    con = ui_usuario.sqliteConnection
+    bici(con, "b1", "MTB")
+    ui_usuario.construir_pantalla_tres(USUARIO)
+    filas = [(f.elemento, f.modalidad) for f in ui_usuario.tabla.data]
+    cadenas = [m for e, m in filas if e.lower() == "cadena"]
+    assert sorted(cadenas) == sorted([ui_usuario.db.modalidadDeUsuario(USUARIO), "MTB"])
+
+
+def test_tabla_de_componentes_con_scroll(ui_usuario):
+    from bikecompfollowapp.app import ALTO_TABLA_COMPONENTES
+    bici(ui_usuario.sqliteConnection, "b1", "MTB")
+    ui_usuario.construir_pantalla_tres(USUARIO)
+    tabla = ui_usuario.tabla
+    assert tabla.scroll is not None and tabla.scroll.content is tabla.cuerpo
+    assert len(tabla.data) > 12
+    assert tabla.scroll.style.height == ALTO_TABLA_COMPONENTES, "12 filas a la vista; el resto con scroll"
