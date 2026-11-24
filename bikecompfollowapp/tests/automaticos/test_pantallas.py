@@ -139,8 +139,8 @@ def test_menu_volver_abajo_izquierda_y_strava_sync_a_la_derecha(en_menu):
     barra = barra_inferior(en_menu.main_window.content)
     assert isinstance(barra.children[0], toga.Button)
     assert barra.children[0].text == "◀ Volver"
-    assert isinstance(barra.children[-1], toga.Button)
-    assert barra.children[-1].text == "Strava Sync"
+    derecha = barra.children[-1]
+    assert [b.text for b in derecha.children] == ["Hist Taller", "Strava Sync"], "Hist Taller junto a Strava Sync"
 
 
 def test_menu_tamano_botones(en_menu):
@@ -1291,3 +1291,225 @@ def test_la_tabla_de_limites_tambien_se_ordena(en_menu):
     assert [f.valor for f in en_menu.tablaLimites.data] == [300, 2500]
     en_menu.tablaLimites.data = [("Plato", "superior", 9000), ("Plato", "inferior", 10)]
     assert [f.valor for f in en_menu.tablaLimites.data] == [10, 9000], "Datos nuevos: se mantiene el orden"
+
+
+# ---- Paso por taller al confirmar los componentes cambiados ----
+
+def pasos_bd(db):
+    return db.execute("SELECT id, usuario, fecha, modalidad FROM PasosTaller").fetchall()
+
+
+def test_confirmar_cambios_registra_un_paso_por_taller(cuadricula, db):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Cubiertas")
+    pulsar(cuadricula, "Confirmar Cambios")
+    [(id_paso, usuario, fecha, modalidad)] = pasos_bd(db)
+    assert (usuario, fecha, modalidad) == (USUARIO, "2026-05-20", "MTB")
+    assert cuadricula.id_ultimo_paso_taller == id_paso
+    assert db.execute("SELECT elemento FROM archivoscomponentes WHERE idPasoTaller = ? ORDER BY id",
+                      (id_paso,)).fetchall() == [("cadena",), ("Cubiertas",)]
+
+
+def test_confirmar_en_el_resumen_registra_un_paso_por_taller(cuadricula, db):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, DETALLES)
+    cuadricula.entrada_fecha.value = "2026-05-21"          # fecha propia del componente
+    pulsar(cuadricula, "Ver resumen ▶")
+    pulsar(cuadricula, "Confirmar")
+    [(id_paso, _usuario, fecha, _modalidad)] = pasos_bd(db)
+    assert fecha == "2026-05-20", "El paso lleva la fecha del mecánico"
+    assert db.execute("SELECT fechaInsercion, idPasoTaller FROM archivoscomponentes WHERE descripcion IS NULL"
+                      ).fetchall() == [("2026-05-21", id_paso)]
+
+
+def test_salir_de_mantenimiento_sin_confirmar_no_registra_paso(cuadricula, db):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "◀ Volver")
+    pulsar(cuadricula, "◀ Volver")
+    assert pasos_bd(db) == []
+
+
+def test_editar_con_el_lapiz_no_crea_paso(en_menu, db):
+    pulsar(en_menu, "Estadísticas")
+    lapiz(fila_box(en_menu, "cadena"))._impl.simulate_press()
+    en_menu.marca_texto.value = "KMC"
+    pulsar(en_menu, "Guardar")
+    assert pasos_bd(db) == []
+
+
+# ---- Coste del paso por taller ----
+
+def coste_bd(db):
+    return db.execute("SELECT coste FROM PasosTaller").fetchall()
+
+
+def test_cuadricula_tiene_el_coste_y_se_guarda_con_confirmar_cambios(cuadricula, db):
+    assert "Coste reparación (€):" in textos_labels(cuadricula.main_window.content)
+    pulsar(cuadricula, "Cadena")
+    cuadricula.entrada_coste_paso.value = "35,90"
+    pulsar(cuadricula, "Confirmar Cambios")
+    assert coste_bd(db) == [(35.9,)]
+
+
+def test_el_coste_se_conserva_entre_cuadriculas_y_llega_al_resumen(cuadricula, db):
+    cuadricula.entrada_coste_paso.value = "120"
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Otros")
+    assert cuadricula.entrada_coste_paso.value == "120"
+    pulsar(cuadricula, "HORQUILLA")
+    pulsar(cuadricula, DETALLES)
+    pulsar(cuadricula, "Siguiente ▶")
+    pulsar(cuadricula, "Ver resumen ▶")
+    assert cuadricula.entrada_coste_paso.value == "120"
+    cuadricula.entrada_coste_paso.value = "150,25"
+    pulsar(cuadricula, "Confirmar")
+    assert coste_bd(db) == [(150.25,)]
+
+
+def test_sin_coste_se_guarda_vacio(cuadricula, db):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Confirmar Cambios")
+    assert coste_bd(db) == [(None,)]
+
+
+def test_coste_no_valido_no_guarda_y_avisa(cuadricula, db):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, DETALLES)
+    pulsar(cuadricula, "Ver resumen ▶")
+    cuadricula.entrada_coste_paso.value = "mucho"
+    pulsar(cuadricula, "Confirmar")
+    assert cuadricula.label_estado_cambios.text == "Coste no válido: escribe un número, p. ej. 45,50"
+    assert coste_bd(db) == [] and db.execute("SELECT count(*) FROM archivoscomponentes WHERE descripcion IS NULL"
+                                             ).fetchone() == (0,)
+
+
+def test_el_coste_se_vacia_tras_guardar_y_al_volver_a_entrar(cuadricula, db):
+    cuadricula.entrada_coste_paso.value = "20"
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Confirmar Cambios")
+    assert cuadricula.coste_paso_taller == ""
+    cuadricula.coste_paso_taller = "99"
+    cuadricula.ir_a_preparacion_mantenimiento()
+    assert cuadricula.coste_paso_taller == ""
+
+
+# ---- Hist Taller: historial de pasos por taller ----
+
+def registrar_paso(app, fecha, modalidad="MTB", coste=None, elementos=("cadena",)):
+    componentes = [dict(fecha=fecha, elemento=e, descripcion=None, marca="", distancia=2000, tiempo=500, meses=None,
+                        modalidad=modalidad) for e in elementos]
+    return app.db.registrarPasoTaller(USUARIO, fecha, modalidad, componentes, coste)
+
+
+@pytest.fixture
+def historial(en_menu):
+    registrar_paso(en_menu, "2026-03-01", "Road", 40, ("cadena",))
+    registrar_paso(en_menu, "2026-09-15", "MTB", 125.5, ("Cubiertas", "pastillas freno"))
+    registrar_paso(en_menu, "2026-06-10", "Gravel", None, ("Plato",))
+    en_menu.ir_a_menu_usuario()
+    pulsar(en_menu, "Hist Taller")
+    return en_menu
+
+
+def test_hist_taller_abre_su_pantalla(historial):
+    pantalla = historial.main_window.content
+    assert "Historial de pasos por taller" in textos_labels(pantalla)
+    assert historial.tablaHistorialTaller in widgets(pantalla)
+
+
+def test_historial_ordenado_por_fecha_descendente(historial):
+    assert [f.fecha for f in historial.tablaHistorialTaller.data] == ["2026-09-15", "2026-06-10", "2026-03-01"]
+    assert historial.tablaHistorialTaller.botones_cabecera[0].text == "Fecha ▼"
+
+
+def test_historial_columnas_y_datos(historial):
+    tabla = historial.tablaHistorialTaller
+    assert [w.text for w in tabla.cabecera.children] == ["Fecha ▼", "Modalidad", "Componentes", "Coste (€)", "Editar"]
+    primera = tabla.data[0]
+    assert (primera.modalidad, primera.componentes, primera.coste_texto) == ("MTB", "Cubiertas, pastillas freno",
+                                                                              "125,50")
+    assert tabla.data[1].coste_texto == "", "Sin coste: vacío"
+
+
+def test_lapiz_en_la_ultima_columna_de_cada_fila(historial):
+    for caja in historial.tablaHistorialTaller.filas_box:
+        assert lapiz(caja.children[-1]) is not None
+
+
+def test_historial_vacio(en_menu):
+    pulsar(en_menu, "Hist Taller")
+    assert "Aún no hay pasos por taller." in textos_labels(en_menu.main_window.content)
+    assert en_menu.tablaHistorialTaller.data == []
+
+
+def test_historial_solo_del_usuario(en_menu):
+    en_menu.db.registrarPasoTaller("otro", "2026-01-01", "Road", [], None)
+    pulsar(en_menu, "Hist Taller")
+    assert en_menu.tablaHistorialTaller.data == []
+
+
+def test_volver_del_historial_al_menu(historial):
+    pantalla = pulsar(historial, "◀ Volver")
+    assert "Hist Taller" in textos_botones(pantalla)
+
+
+def test_lapiz_abre_la_edicion_del_paso(historial):
+    lapiz(historial.tablaHistorialTaller.filas_box[0])._impl.simulate_press()
+    pantalla = historial.main_window.content
+    assert "Editar paso por taller" in textos_labels(pantalla)
+    assert "Componentes cambiados: Cubiertas, pastillas freno" in textos_labels(pantalla)
+    assert (historial.entrada_fecha_paso.value, historial.selection_modalidad_paso.value,
+            historial.entrada_coste_paso.value) == ("2026-09-15", "MTB", "125,50")
+
+
+def test_guardar_la_edicion_del_paso(historial, db):
+    id_paso = historial.tablaHistorialTaller.data[0].id
+    lapiz(historial.tablaHistorialTaller.filas_box[0])._impl.simulate_press()
+    historial.entrada_fecha_paso.value = "2026-01-20"
+    historial.selection_modalidad_paso.value = "Gravel"
+    historial.entrada_coste_paso.value = "99,90"
+    pulsar(historial, "Guardar")
+    assert db.execute("SELECT fecha, modalidad, coste FROM PasosTaller WHERE id = ?", (id_paso,)).fetchone() == (
+        "2026-01-20", "Gravel", 99.9)
+    assert [f.fecha for f in historial.tablaHistorialTaller.data] == ["2026-06-10", "2026-03-01", "2026-01-20"], \
+        "Vuelve al historial, que sigue ordenado por fecha descendente"
+    assert historial.label_estado_historial.text == "Paso por taller actualizado."
+
+
+def test_editar_el_paso_no_toca_sus_componentes(historial, db):
+    antes = db.execute("SELECT * FROM archivoscomponentes ORDER BY id").fetchall()
+    lapiz(historial.tablaHistorialTaller.filas_box[0])._impl.simulate_press()
+    historial.entrada_fecha_paso.value = "2026-01-20"
+    pulsar(historial, "Guardar")
+    assert db.execute("SELECT * FROM archivoscomponentes ORDER BY id").fetchall() == antes
+
+
+@pytest.mark.parametrize("campo, valor, mensaje", [
+    ("entrada_fecha_paso", "", "Faltan campos obligatorios (*)"),
+    ("entrada_fecha_paso", "15/09/2026", "Fecha no válida (AAAA-MM-DD)"),
+    ("entrada_coste_paso", "caro", "Coste no válido: escribe un número, p. ej. 45,50"),
+])
+def test_edicion_del_paso_no_valida_no_guarda(historial, db, campo, valor, mensaje):
+    antes = db.execute("SELECT * FROM PasosTaller ORDER BY id").fetchall()
+    lapiz(historial.tablaHistorialTaller.filas_box[0])._impl.simulate_press()
+    getattr(historial, campo).value = valor
+    pulsar(historial, "Guardar")
+    assert historial.label_estado_paso.text == mensaje
+    assert db.execute("SELECT * FROM PasosTaller ORDER BY id").fetchall() == antes
+
+
+def test_volver_de_la_edicion_al_historial_sin_cambios(historial, db):
+    antes = db.execute("SELECT * FROM PasosTaller ORDER BY id").fetchall()
+    lapiz(historial.tablaHistorialTaller.filas_box[0])._impl.simulate_press()
+    historial.entrada_coste_paso.value = "1"
+    pantalla = pulsar(historial, "◀ Volver")
+    assert historial.tablaHistorialTaller in widgets(pantalla)
+    assert db.execute("SELECT * FROM PasosTaller ORDER BY id").fetchall() == antes
+
+
+def test_hist_taller_traducido(en_menu):
+    translations.set_language("en")
+    en_menu.ir_a_menu_usuario()
+    pantalla = pulsar(en_menu, "Workshop Hist")
+    assert "Workshop visit history" in textos_labels(pantalla)
+

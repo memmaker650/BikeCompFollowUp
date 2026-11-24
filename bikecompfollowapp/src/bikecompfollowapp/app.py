@@ -14,6 +14,7 @@ import sqlite3
 import logging
 from datetime import date, datetime, time
 import asyncio
+import math
 
 if __name__ == "__main__" or __package__ is None:
     import DB_Operations as dbops
@@ -78,6 +79,11 @@ COLUMNAS_COMPONENTES = [
     ("col.horas_desde_alta", "horasDesdeInsercion", 70), ("col.meses_desde_alta", "mesesDesdeInsercion", 95),
     ("col.activo", "activo", 70),
 ]
+TAMANO_VENTANA_RESUMEN = (900, 640)
+TAMANO_VENTANA_HISTORIAL = (820, 600)
+# Tabla de Hist Taller: (clave de la cabecera, atributo, ancho); la última columna es el ✏️
+COLUMNAS_HISTORIAL_TALLER = [("col.fecha", "fecha", 110), ("col.modalidad", "modalidad", 95),
+                             ("col.componentes", "componentes", 340), ("col.coste", "coste_texto", 100)]
 TAMANO_VENTANA_ESTADISTICAS = (920, 900)   # la tabla de componentes con ✏️ mide unos 880 de ancho
 ICONO_EDITAR = "✏️"           # última columna de la tabla 1: editar el componente (solo los activos)
 
@@ -98,6 +104,11 @@ def texto_numero(valor):
         return ""
     valor = round(float(valor), 1)
     return str(int(valor)) if valor.is_integer() else f"{valor:.1f}"
+
+
+def formatear_coste(coste):
+    """45.5 -> '45,50'; None -> ''."""
+    return "" if coste is None else f"{coste:.2f}".replace(".", ",")
 
 
 def es_activo(valor):
@@ -472,11 +483,102 @@ class BikeCompFollowApp(toga.App):
             style=Pack(direction=COLUMN, align_items=CENTER),
         )
 
+        self.boton_hist_taller = self._boton(t("menu.hist_taller"), self.ir_a_historial_taller)
         barra_inferior = self._barra_inferior(
             izquierda=self._boton_volver(self.volver_pantalla_inicial),
-            derecha=self._boton(t("menu.strava"), self.ir_a_pantalla_recoleccionDatos),
+            derecha=toga.Box(children=[self.boton_hist_taller,
+                                       self._boton(t("menu.strava"), self.ir_a_pantalla_recoleccionDatos)],
+                             style=Pack(direction=ROW)),
         )
         return self._pantalla(contenido, barra_inferior)
+
+    # -------- Hist Taller: pasos por taller del usuario (el más reciente primero) --------
+    def ir_a_historial_taller(self, widget=None):
+        self._mostrar(self.construir_historial_taller())
+        self.agrandar_ventana(*TAMANO_VENTANA_HISTORIAL)
+
+    def construir_historial_taller(self):
+        usuario = self.usuarioSeleccionado
+        filas = self.db.historialTaller(usuario)
+        for fila in filas:
+            fila["coste_texto"] = formatear_coste(fila["coste"])
+            fila["componentes"] = fila["componentes"] or ""
+        self.label_estado_historial = toga.Label("")
+        self.tablaHistorialTaller = tabla_filas.TablaFilas(
+            _columnas_filas(COLUMNAS_HISTORIAL_TALLER), data=filas,
+            accion=self.boton_editar_paso_taller, titulo_accion=t("col.editar"),
+            orden=("fecha", True),          # fecha descendente: el paso más reciente arriba
+            style=Pack(direction=COLUMN))
+        contenido = toga.Box(children=[
+            toga.Box(children=[toga.Label(t("componente.usuario"), style=Pack(color=AZUL)), toga.Label(usuario or ""),
+                               toga.Box(style=Pack(flex=1)), self.label_estado_historial],
+                     style=Pack(direction=ROW, margin_bottom=ESPACIO)),
+            toga.Label(t("hist.titulo"), style=Pack(font_size=16, margin_bottom=ESPACIO)),
+            self.tablaHistorialTaller,
+        ], style=Pack(direction=COLUMN))
+        if not filas:
+            contenido.add(toga.Label(t("hist.vacio"), style=Pack(margin_top=ESPACIO)))
+        main_box = toga.Box(style=Pack(direction=COLUMN, margin=10))
+        main_box.add(toga.ScrollContainer(content=contenido, style=Pack(flex=1)))
+        main_box.add(self._barra_inferior(izquierda=self._boton_volver(self.ir_a_menu_usuario)))
+        return main_box
+
+    def boton_editar_paso_taller(self, fila):
+        return toga.Button(ICONO_EDITAR, on_press=lambda widget, id_=fila.id: self.editar_paso_taller(id_),
+                           style=Pack(width=44))
+
+    def editar_paso_taller(self, id_paso):
+        """Pantalla para cambiar la fecha, la modalidad y el coste de un paso por taller."""
+        paso = self.db.pasoTallerPorId(id_paso)
+        if paso is None:
+            self._mostrar_estado(self.label_estado_historial, t("estado.lectura_error"), ok=False)
+            return False
+        self.paso_en_edicion = paso
+        self.label_estado_paso = toga.Label(t("hist.editar_titulo"), style=Pack(margin_bottom=10, text_align=CENTER))
+        self.entrada_fecha_paso = self._texto(t("campo.fecha_placeholder"), value=paso["fecha"] or "")
+        self.selection_modalidad_paso = toga.Selection(items=list(MODALIDADES_MANTENIMIENTO),
+                                                       style=Pack(width=ANCHO_CAMPO))
+        if paso["modalidad"] in MODALIDADES_MANTENIMIENTO:
+            self.selection_modalidad_paso.value = paso["modalidad"]
+        self.coste_paso_taller = formatear_coste(paso["coste"])
+        formulario = self._formulario()
+        for widget in (
+            self.label_estado_paso,
+            toga.Label(t("hist.componentes", lista=paso["componentes"] or "—"), style=Pack(margin_bottom=15)),
+            self._campo(t("campo.fecha"), self.entrada_fecha_paso, obligatorio=True),
+            self._campo(t("campo.modalidad"), self.selection_modalidad_paso, obligatorio=True),
+            self.fila_coste_paso(),
+            self._boton(t("comun.guardar"), self.guardar_edicion_paso_taller),
+            toga.Label(t("alta.leyenda_obligatorio"), style=Pack(color=ROJO_OBLIGATORIO, font_size=11, margin_top=10)),
+        ):
+            formulario.add(widget)
+        self._mostrar(self._pantalla(formulario, self._barra_inferior(
+            izquierda=self._boton_volver(self.ir_a_historial_taller))))
+        return True
+
+    def guardar_edicion_paso_taller(self, widget=None) -> bool:
+        fecha = (self.entrada_fecha_paso.value or "").strip()
+        modalidad = self.selection_modalidad_paso.value
+        if not (fecha and modalidad):
+            self._mostrar_estado(self.label_estado_paso, t("estado.faltan_obligatorios"), ok=False)
+            return False
+        try:
+            date.fromisoformat(fecha)
+        except ValueError:
+            self._mostrar_estado(self.label_estado_paso, t("estado.fecha_invalida"), ok=False)
+            return False
+        try:
+            coste = self.leer_coste(self.entrada_coste_paso.value)
+        except ValueError:
+            self._mostrar_estado(self.label_estado_paso, t("estado.coste_invalido"), ok=False)
+            return False
+        if not self.db.actualizarPasoTaller(self.paso_en_edicion["id"], fecha, modalidad, coste):
+            self._mostrar_estado(self.label_estado_paso, t("estado.cambios_error"), ok=False)
+            return False
+        self.coste_paso_taller = ""
+        self.ir_a_historial_taller()
+        self._mostrar_estado(self.label_estado_historial, t("estado.paso_editado"))
+        return True
 
     def ir_a_menu_usuario(self, widget=None, usuario=None):
         if usuario is None:
@@ -584,6 +686,8 @@ class BikeCompFollowApp(toga.App):
         self.label_cambiados = toga.Label(self.texto_componentes_cambiados(), style=Pack(margin_bottom=ESPACIO))
         contenido.add(self.label_cambiados)
         contenido.add(rejilla)
+        # Coste del paso por taller (opcional); se conserva al cambiar de cuadrícula y se ve en el resumen
+        contenido.add(self.fila_coste_paso(margen_top=ESPACIO))
 
         hay_cambios = bool(self.componentes_cambiados)
         self.boton_confirmar_cambios = self._boton(t("mant.confirmar_cambios"), self.confirmar_cambios_directos)
@@ -605,6 +709,26 @@ class BikeCompFollowApp(toga.App):
         if getattr(self, "_componentes_cambiados", None) is None:
             self._componentes_cambiados = []
         return self._componentes_cambiados
+
+    def fila_coste_paso(self, margen_top=0):
+        """Fila 'Coste (€):' con el cuadro del coste del paso por taller (self.entrada_coste_paso)."""
+        self.entrada_coste_paso = toga.TextInput(
+            value=getattr(self, "coste_paso_taller", "") or "", placeholder="0,00",
+            on_change=lambda w: setattr(self, "coste_paso_taller", w.value), style=Pack(width=120))
+        return toga.Box(children=[toga.Label(t("campo.coste"), style=Pack(margin_right=ESPACIO)),
+                                  self.entrada_coste_paso],
+                        style=Pack(direction=ROW, align_items=CENTER, margin_top=margen_top))
+
+    @staticmethod
+    def leer_coste(texto):
+        """'45,50' / '45.5' / ' 45 € ' -> 45.5; vacío -> None. Lanza ValueError si no es un número >= 0."""
+        texto = (texto or "").replace("€", "").strip().replace(",", ".")
+        if not texto:
+            return None
+        coste = round(float(texto), 2)
+        if coste < 0 or not math.isfinite(coste):    # negativo, 'nan' o 'inf'
+            raise ValueError(texto)
+        return coste
 
     def texto_componentes_cambiados(self):
         if not self.componentes_cambiados:
@@ -628,6 +752,7 @@ class BikeCompFollowApp(toga.App):
         self.volver_preparacion = volver or self.ir_a_menu_usuario
         self.componentes_cambiados.clear()
         self.detalles_cambiados.clear()
+        self.coste_paso_taller = ""
         self.mecanico = None
         self.fecha_mecanico = date.today()
         self.modalidad_mantenimiento = None
@@ -768,24 +893,35 @@ class BikeCompFollowApp(toga.App):
     def detalle_de(self, boton):
         return self.detalles_cambiados.get(boton) or self.detalle_por_defecto(boton)
 
-    def guardar_cambio(self, detalle) -> bool:
-        """Guarda en BD un componente cambiado. Límites vacíos -> los del componente."""
-        elemento, modalidad, usuario = detalle["elemento"], detalle["modalidad"], self.usuarioSeleccionado
-        km, horas, meses = self.db.limitesComponente(elemento, usuario, modalidad)
-        otros = (detalle.get("otros") or None) if self.es_cadena(elemento) else None
-        return self.db.guardarComponente(
-            detalle["fecha"], usuario, elemento, None, (detalle.get("marca") or "").strip(),
-            (detalle.get("km") or "").strip() or km, (detalle.get("horas") or "").strip() or horas,
-            (detalle.get("meses") or "").strip() or meses, modalidad, otros,
-            (detalle.get("modelo") or "").strip() or None)
+    def datos_cambio(self, detalle):
+        """Detalles de un componente cambiado -> argumentos de BaseDatos.guardarComponente (sin el usuario).
+        Límites vacíos -> los del componente."""
+        elemento, modalidad = detalle["elemento"], detalle["modalidad"]
+        km, horas, meses = self.db.limitesComponente(elemento, self.usuarioSeleccionado, modalidad)
+        return dict(
+            fecha=detalle["fecha"], elemento=elemento, descripcion=None, marca=(detalle.get("marca") or "").strip(),
+            distancia=(detalle.get("km") or "").strip() or km, tiempo=(detalle.get("horas") or "").strip() or horas,
+            meses=(detalle.get("meses") or "").strip() or meses, modalidad=modalidad,
+            otros=(detalle.get("otros") or None) if self.es_cadena(elemento) else None,
+            modelo=(detalle.get("modelo") or "").strip() or None)
 
     def guardar_cambios(self) -> bool:
-        """Guarda todos los componentes de la pila; si todo va bien la vacía, avisa y vuelve a la pantalla
-        desde la que se entró en Mantenimiento (menú o Estadísticas)."""
+        """Registra el paso por taller (fecha del mecánico y modalidad elegidas) con todos los componentes de
+        la pila, todo o nada. Si va bien vacía la pila, avisa y vuelve a la pantalla desde la que se entró en
+        Mantenimiento (menú o Estadísticas)."""
+        try:
+            coste = self.leer_coste(getattr(self, "coste_paso_taller", ""))
+        except ValueError:
+            if getattr(self, "label_estado_cambios", None) is not None:
+                self._mostrar_estado(self.label_estado_cambios, t("estado.coste_invalido"), ok=False)
+            return False
         detalles = [self.detalle_de(b) for b in self.componentes_cambiados]
-        fallidos = [d["elemento"] for d in detalles if not self.guardar_cambio(d)]
-        if fallidos:
-            logging.error("No se pudieron guardar los componentes cambiados: %s", fallidos)
+        fecha = (getattr(self, "fecha_mecanico", None) or date.today()).isoformat()
+        modalidad = (getattr(self, "modalidad_mantenimiento", None)
+                     or self.db.modalidadDeUsuario(self.usuarioSeleccionado))
+        self.id_ultimo_paso_taller = self.db.registrarPasoTaller(
+            self.usuarioSeleccionado, fecha, modalidad, [self.datos_cambio(d) for d in detalles], coste)
+        if self.id_ultimo_paso_taller is None:
             if getattr(self, "label_estado_cambios", None) is not None:
                 self._mostrar_estado(self.label_estado_cambios, t("estado.cambios_error"), ok=False)
             return False
@@ -793,6 +929,7 @@ class BikeCompFollowApp(toga.App):
         logging.info("Componentes cambiados guardados (%s): %s", self.usuarioSeleccionado, nombres)
         self.componentes_cambiados.clear()
         self.detalles_cambiados.clear()
+        self.coste_paso_taller = ""
         getattr(self, "volver_preparacion", self.ir_a_menu_usuario)()
         self.aviso_cambios_guardados = self.construirVentanaAviso(
             t("aviso.cambios_guardados_titulo"),
@@ -868,6 +1005,7 @@ class BikeCompFollowApp(toga.App):
     # -------- Resumen de componentes cambiados: Confirmar / Editar --------
     def ir_a_resumen_cambiados(self):
         self._mostrar(self.construir_resumen_cambiados())
+        self.agrandar_ventana(*TAMANO_VENTANA_RESUMEN)    # 9 columnas: en 640 de ancho se cortaban los textos
 
     def construir_resumen_cambiados(self):
         filas = []
@@ -886,6 +1024,7 @@ class BikeCompFollowApp(toga.App):
         contenido = toga.Box(children=[
             toga.Label(t("resumen.titulo"), style=Pack(font_size=16, margin_bottom=ESPACIO)),
             self.tablaResumenCambiados,
+            self.fila_coste_paso(margen_top=ESPACIO),
             self.label_estado_cambios,
             toga.Box(children=[self.boton_confirmar_resumen, self.boton_editar_resumen], style=Pack(direction=ROW)),
         ], style=Pack(direction=COLUMN, flex=1))

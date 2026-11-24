@@ -70,6 +70,7 @@ def app(app_paths):
     instancia.db.crearTablaActividadesStrava()
     instancia.db.crearTablaDatosComponente()
     instancia.db.crearTablaBicicletas()
+    instancia.db.crearTablaPasosTaller()
     instancia.cargarIdioma()
     yield instancia
     instancia.sqliteConnection.close()

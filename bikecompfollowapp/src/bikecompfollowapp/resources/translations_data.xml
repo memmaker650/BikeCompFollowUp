@@ -54,6 +54,14 @@
     <text key="preparacion.continuar">Continuar ▶</text>
     <text key="preparacion.resumen">{modalidad} · mecánico el {fecha}</text>
     <text key="menu.strava">Strava Sync</text>
+    <text key="menu.hist_taller">Hist Taller</text>
+    <text key="hist.titulo">Historial de pasos por taller</text>
+    <text key="hist.vacio">Aún no hay pasos por taller.</text>
+    <text key="hist.editar_titulo">Editar paso por taller</text>
+    <text key="hist.componentes">Componentes cambiados: {lista}</text>
+    <text key="col.componentes">Componentes</text>
+    <text key="col.coste">Coste (€)</text>
+    <text key="estado.paso_editado">Paso por taller actualizado.</text>
     <!-- Campos de formulario -->
     <text key="campo.nombre">Nombre</text>
     <text key="campo.usuario">Usuario</text>
@@ -73,6 +81,8 @@
     <text key="alta.mas_componente">+ Componente</text>
     <text key="alta.leyenda_obligatorio">* Campo obligatorio</text>
     <text key="estado.faltan_obligatorios">Faltan campos obligatorios (*)</text>
+    <text key="campo.coste">Coste reparación (€):</text>
+    <text key="estado.coste_invalido">Coste no válido: escribe un número, p. ej. 45,50</text>
     <text key="estado.fecha_invalida">Fecha no válida (AAAA-MM-DD)</text>
     <text key="estado.cambios_error">Error al guardar los cambios.</text>
     <!-- Alta de usuario / componente -->
@@ -219,6 +229,14 @@
     <text key="preparacion.continuar">Continue ▶</text>
     <text key="preparacion.resumen">{modalidad} · mechanic on {fecha}</text>
     <text key="menu.strava">Strava Sync</text>
+    <text key="menu.hist_taller">Workshop Hist</text>
+    <text key="hist.titulo">Workshop visit history</text>
+    <text key="hist.vacio">No workshop visits yet.</text>
+    <text key="hist.editar_titulo">Edit workshop visit</text>
+    <text key="hist.componentes">Changed components: {lista}</text>
+    <text key="col.componentes">Components</text>
+    <text key="col.coste">Cost (€)</text>
+    <text key="estado.paso_editado">Workshop visit updated.</text>
     <text key="campo.nombre">Name</text>
     <text key="campo.usuario">User</text>
     <text key="campo.descripcion">Description: </text>
@@ -237,6 +255,8 @@
     <text key="alta.mas_componente">+ Component</text>
     <text key="alta.leyenda_obligatorio">* Required field</text>
     <text key="estado.faltan_obligatorios">Required fields (*) are missing</text>
+    <text key="campo.coste">Repair cost (€):</text>
+    <text key="estado.coste_invalido">Invalid cost: type a number, e.g. 45.50</text>
     <text key="estado.fecha_invalida">Invalid date (YYYY-MM-DD)</text>
     <text key="estado.cambios_error">Error saving the changes.</text>
     <text key="alta.titulo">New entry</text>
@@ -376,6 +396,14 @@
     <text key="preparacion.continuar">Continuer ▶</text>
     <text key="preparacion.resumen">{modalidad} · mécanicien le {fecha}</text>
     <text key="menu.strava">Strava Sync</text>
+    <text key="menu.hist_taller">Hist Atelier</text>
+    <text key="hist.titulo">Historique des passages à l'atelier</text>
+    <text key="hist.vacio">Aucun passage à l'atelier pour l'instant.</text>
+    <text key="hist.editar_titulo">Modifier le passage à l'atelier</text>
+    <text key="hist.componentes">Composants changés : {lista}</text>
+    <text key="col.componentes">Composants</text>
+    <text key="col.coste">Coût (€)</text>
+    <text key="estado.paso_editado">Passage à l'atelier mis à jour.</text>
     <text key="campo.nombre">Nom</text>
     <text key="campo.usuario">Utilisateur</text>
     <text key="campo.descripcion">Description : </text>
@@ -394,6 +422,8 @@
     <text key="alta.mas_componente">+ Composant</text>
     <text key="alta.leyenda_obligatorio">* Champ obligatoire</text>
     <text key="estado.faltan_obligatorios">Champs obligatoires (*) manquants</text>
+    <text key="campo.coste">Coût de la réparation (€) :</text>
+    <text key="estado.coste_invalido">Coût non valide : saisissez un nombre, p. ex. 45,50</text>
     <text key="estado.fecha_invalida">Date invalide (AAAA-MM-JJ)</text>
     <text key="estado.cambios_error">Erreur lors de l'enregistrement des changements.</text>
     <text key="alta.titulo">Nouvelle entrée</text>

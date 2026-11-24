@@ -306,8 +306,30 @@ SQL_CREAR_ARCHIVOS_COMPONENTES = """CREATE TABLE IF NOT EXISTS archivoscomponent
     tiempoLimite integer,
     activo BOOLEAN DEFAULT True,
     mesesLimite integer,
-    otros TEXT
+    otros TEXT,
+    idPasoTaller INTEGER REFERENCES PasosTaller(id)
 )"""
+
+
+# Pasos por taller: cada vez que se confirman componentes cambiados en Mantenimiento. Los componentes
+# cambiados en ese paso llevan su id en archivoscomponentes.idPasoTaller.
+SQL_CREAR_PASOS_TALLER = """CREATE TABLE IF NOT EXISTS PasosTaller (
+    id INTEGER PRIMARY KEY,
+    usuario TEXT NOT NULL,
+    fecha DATE NOT NULL,
+    modalidad TEXT NOT NULL CHECK (modalidad IN ('Road', 'MTB', 'Gravel')),
+    coste REAL CHECK (coste IS NULL OR coste >= 0)
+)"""
+
+
+def asegurarTablaPasosTaller(conexion) -> None:
+    """Crea PasosTaller o, si ya existía sin ella, le añade la columna coste (opcional: lo que costó)."""
+    conexion.execute(SQL_CREAR_PASOS_TALLER)
+    columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(PasosTaller)")}
+    if "coste" not in columnas:
+        logging.info("Migrando PasosTaller: se añade la columna coste")
+        conexion.execute("ALTER TABLE PasosTaller ADD COLUMN coste REAL CHECK (coste IS NULL OR coste >= 0)")
+    conexion.commit()
 
 
 def modalidadDeUsuario(conexion, usuario):
@@ -318,8 +340,10 @@ def modalidadDeUsuario(conexion, usuario):
         return "Road"
 
 
-# Columnas de texto opcionales añadidas después: modelo del componente y otros (p. ej. velocidades de la cadena)
-COLUMNAS_OPCIONALES_COMPONENTES = ("modelo", "otros")
+# Columnas opcionales añadidas después -> su tipo: modelo del componente, otros (p. ej. velocidades de la
+# cadena) y el paso por taller en el que se cambió
+COLUMNAS_OPCIONALES_COMPONENTES = {"modelo": "TEXT", "otros": "TEXT",
+                                   "idPasoTaller": "INTEGER REFERENCES PasosTaller(id)"}
 
 
 def asegurarColumnasArchivosComponentes(conexion) -> None:
@@ -336,10 +360,10 @@ def asegurarColumnasArchivosComponentes(conexion) -> None:
         conexion.commit()
         columnas.append("mesesLimite")
     if "modalidad" in columnas:
-        for columna in COLUMNAS_OPCIONALES_COMPONENTES:
+        for columna, tipo in COLUMNAS_OPCIONALES_COMPONENTES.items():
             if columna not in columnas:
                 logging.info("Migrando archivoscomponentes: se añade la columna %s", columna)
-                conexion.execute(f"ALTER TABLE archivoscomponentes ADD COLUMN {columna} TEXT")
+                conexion.execute(f"ALTER TABLE archivoscomponentes ADD COLUMN {columna} {tipo}")
                 conexion.commit()
         return
     logging.info("Migrando archivoscomponentes: se añade la columna obligatoria modalidad")
@@ -619,6 +643,7 @@ class BaseDatos:
         self.crearTablaActividadesStrava()
         self.crearTablaDatosComponente()
         self.crearTablaBicicletas()
+        self.crearTablaPasosTaller()
         self.limpiarDuplicadosStrava()
 
     def crearDBBasica(self):
@@ -715,6 +740,104 @@ class BaseDatos:
         except sqlite3.Error as error:
             logging.error("Error al crear la tabla datosComponente: %s", error)
             return False
+        return True
+
+    def crearTablaPasosTaller(self) -> bool:
+        try:
+            asegurarTablaPasosTaller(self.conexion)
+        except sqlite3.Error as error:
+            logging.error("Error al crear la tabla PasosTaller: %s", error)
+            return False
+        return True
+
+    def registrarPasoTaller(self, usuario, fecha, modalidad, componentes, coste=None) -> int | None:
+        """Guarda un paso por taller y sus componentes cambiados, todo o nada (una sola transacción).
+        componentes: [dict con los argumentos de guardarComponente salvo usuario]. coste: lo que costó la
+        reparación (None si no se indica). Devuelve el id del paso (None si algo falla: no se guarda nada)."""
+        if modalidad not in MODALIDADES_ESTADISTICAS:
+            logging.error("Paso por taller sin modalidad válida: %r", modalidad)
+            return None
+        try:
+            asegurarTablaPasosTaller(self.conexion)
+            asegurarColumnasArchivosComponentes(self.conexion)
+            id_paso = self.conexion.execute(
+                "INSERT INTO PasosTaller (usuario, fecha, modalidad, coste) VALUES (?, ?, ?, ?)",
+                (usuario, fecha, modalidad, coste)).lastrowid
+            for componente in componentes:
+                if not self.guardarComponente(usuario=usuario, id_paso_taller=id_paso, confirmar=False,
+                                              **componente):
+                    raise sqlite3.Error(f"no se pudo guardar {componente.get('elemento')!r}")
+            self.conexion.commit()
+        except sqlite3.Error as error:
+            self.conexion.rollback()
+            logging.error("Paso por taller de %s el %s sin guardar: %s", usuario, fecha, error)
+            return None
+        logging.info("Paso por taller %s (%s, %s, %s, coste %s): %d componentes", id_paso, usuario, fecha,
+                     modalidad, coste, len(componentes))
+        return id_paso
+
+    def pasosTaller(self, usuario):
+        """[(id, fecha, modalidad, coste, nº de componentes)] de los pasos por taller del usuario, el más
+        reciente primero."""
+        try:
+            return self.conexion.execute(
+                """SELECT p.id, p.fecha, p.modalidad, p.coste, count(ac.id) FROM PasosTaller p
+                   LEFT JOIN archivoscomponentes ac ON ac.idPasoTaller = p.id
+                   WHERE p.usuario = ? GROUP BY p.id ORDER BY p.fecha DESC, p.id DESC""", (usuario,)).fetchall()
+        except sqlite3.Error as error:
+            logging.error("Error al leer los pasos por taller de %s: %s", usuario, error)
+            return []
+
+    CAMPOS_HISTORIAL_TALLER = ("id", "fecha", "modalidad", "coste", "componentes", "num_componentes")
+
+    def historialTaller(self, usuario):
+        """Pasos por taller del usuario para la pantalla Hist Taller, el más reciente primero: dicts con id, fecha,
+        modalidad, coste, componentes (nombres separados por comas) y num_componentes."""
+        try:
+            asegurarTablaPasosTaller(self.conexion)
+            asegurarColumnasArchivosComponentes(self.conexion)
+            filas = self.conexion.execute(
+                """SELECT p.id, p.fecha, p.modalidad, p.coste,
+                          (SELECT group_concat(elemento, ', ') FROM
+                               (SELECT elemento FROM archivoscomponentes WHERE idPasoTaller = p.id ORDER BY id)),
+                          (SELECT count(*) FROM archivoscomponentes WHERE idPasoTaller = p.id)
+                   FROM PasosTaller p WHERE p.usuario = ?
+                   ORDER BY p.fecha DESC, p.id DESC""", (usuario,)).fetchall()
+        except sqlite3.Error as error:
+            logging.error("Error al leer el historial de taller de %s: %s", usuario, error)
+            return []
+        return [dict(zip(self.CAMPOS_HISTORIAL_TALLER, fila)) for fila in filas]
+
+    def pasoTallerPorId(self, id_paso):
+        """Dict (id, usuario, fecha, modalidad, coste, componentes) de un paso por taller; None si no existe."""
+        try:
+            fila = self.conexion.execute(
+                """SELECT p.id, p.usuario, p.fecha, p.modalidad, p.coste,
+                          (SELECT group_concat(elemento, ', ') FROM
+                               (SELECT elemento FROM archivoscomponentes WHERE idPasoTaller = p.id ORDER BY id))
+                   FROM PasosTaller p WHERE p.id = ?""", (id_paso,)).fetchone()
+        except sqlite3.Error as error:
+            logging.error("Error al leer el paso por taller %s: %s", id_paso, error)
+            return None
+        return dict(zip(("id", "usuario", "fecha", "modalidad", "coste", "componentes"), fila)) if fila else None
+
+    def actualizarPasoTaller(self, id_paso, fecha, modalidad, coste) -> bool:
+        """Edita la fecha, la modalidad y el coste de un paso por taller (no toca sus componentes)."""
+        if modalidad not in MODALIDADES_ESTADISTICAS:
+            logging.error("Edición del paso por taller %s sin modalidad válida: %r", id_paso, modalidad)
+            return False
+        try:
+            cursor = self.conexion.execute(
+                "UPDATE PasosTaller SET fecha = ?, modalidad = ?, coste = ? WHERE id = ?",
+                (fecha, modalidad, coste, id_paso))
+            self.conexion.commit()
+        except sqlite3.Error as error:
+            logging.error("Error al editar el paso por taller %s: %s", id_paso, error)
+            return False
+        if cursor.rowcount != 1:
+            logging.error("No existe el paso por taller %s para editarlo", id_paso)
+            return False
+        logging.info("Paso por taller %s editado: %s, %s, coste %s", id_paso, fecha, modalidad, coste)
         return True
 
     def crearTablaBicicletas(self) -> bool:
@@ -829,7 +952,7 @@ class BaseDatos:
         return modalidadDeUsuario(self.conexion, usuario)
 
     def guardarComponente(self, fecha, usuario, elemento, descripcion, marca, distancia, tiempo, meses,
-                          modalidad, otros=None, modelo=None) -> bool:
+                          modalidad, otros=None, modelo=None, id_paso_taller=None, confirmar=True) -> bool:
         """Alta de componente en una modalidad (Road/MTB/Gravel, obligatoria). Si existía POR DEFECTO para esa
         misma modalidad se le ponen estos datos en vez de duplicarlo. `otros`: dato extra del componente
         (las velocidades de la cadena: '6v' ... '13v')."""
@@ -846,18 +969,21 @@ class BaseDatos:
             if por_defecto:
                 self.conexion.execute(
                     "UPDATE archivoscomponentes SET fechaInsercion = ?, elemento = ?, descripcion = ?, marca = ?, "
-                    "modelo = ?, distanciaLimite = ?, tiempoLimite = ?, mesesLimite = ?, otros = ?, activo = True "
-                    "WHERE id = ?",
-                    (fecha, elemento, descripcion, marca, modelo, distancia, tiempo, meses, otros, por_defecto[0])
+                    "modelo = ?, distanciaLimite = ?, tiempoLimite = ?, mesesLimite = ?, otros = ?, activo = True, "
+                    "idPasoTaller = ? WHERE id = ?",
+                    (fecha, elemento, descripcion, marca, modelo, distancia, tiempo, meses, otros, id_paso_taller,
+                     por_defecto[0])
                 )
             else:
                 self.conexion.execute(
                     "INSERT INTO archivoscomponentes (fechaInsercion, usuario, elemento, modalidad, descripcion, "
-                    "marca, modelo, distanciaLimite, tiempoLimite, mesesLimite, otros) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (fecha, usuario, elemento, modalidad, descripcion, marca, modelo, distancia, tiempo, meses, otros)
+                    "marca, modelo, distanciaLimite, tiempoLimite, mesesLimite, otros, idPasoTaller) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (fecha, usuario, elemento, modalidad, descripcion, marca, modelo, distancia, tiempo, meses, otros,
+                     id_paso_taller)
                 )
-            self.conexion.commit()
+            if confirmar:      # dentro de registrarPasoTaller se confirma todo junto al final
+                self.conexion.commit()
         except sqlite3.Error as error:
             logging.error("Error al insertar en archivoscomponentes: %s", error)
             return False

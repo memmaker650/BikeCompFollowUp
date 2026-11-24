@@ -199,7 +199,7 @@ def test_seccion_entre_los_datos_y_el_boton(alta):
 
 def test_columna_otros_en_archivoscomponentes(ui):
     columnas = [f[1] for f in ui.sqliteConnection.execute("PRAGMA table_info(archivoscomponentes)")]
-    assert columnas[-1] == "otros"
+    assert columnas[columnas.index("mesesLimite") + 1] == "otros"
 
 
 def test_tabla_sin_otros_se_migra(ui):

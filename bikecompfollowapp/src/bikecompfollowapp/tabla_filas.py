@@ -80,8 +80,9 @@ def _boton_plano(boton):
 
 class TablaFilas(toga.Box):
     def __init__(self, columnas, data=None, on_select=None, accion=None, titulo_accion="", ancho_accion=50,
-                 alto_maximo=ALTO_MAXIMO, style=None):
+                 alto_maximo=ALTO_MAXIMO, orden=None, style=None):
         """columnas: [(cabecera, atributo) o (cabecera, atributo, ancho)]. accion(fila) -> widget o None.
+        orden: (atributo, descendente) para que salga ordenada desde el principio (con su flecha en la cabecera).
         alto_maximo: con un número, las filas van en un ScrollContainer de ese alto como mucho. Ojo: en macOS un
         ScrollContainer no hace crecer la ventana, así que es mejor dejarlo en None y que haga scroll la pantalla."""
         super().__init__(style=style or Pack(direction=COLUMN))
@@ -122,7 +123,10 @@ class TablaFilas(toga.Box):
         else:
             self.scroll = toga.ScrollContainer(content=self.cuerpo, horizontal=False, style=Pack(height=ALTO_FILA))
             self.add(self.scroll)
+        self.orden = orden
         self.data = data or []
+        if orden is not None:
+            self._pintar_cabecera()
 
     # ---- datos ----
     @property

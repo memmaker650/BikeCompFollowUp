@@ -125,7 +125,7 @@ def test_columnas_archivoscomponentes(db):
     columnas = [f[1] for f in db.execute("PRAGMA table_info(archivoscomponentes)")]
     assert columnas == [
         "id", "usuario", "elemento", "modalidad", "descripcion", "marca", "modelo",
-        "fechaInsercion", "distanciaLimite", "tiempoLimite", "activo", "mesesLimite", "otros",
+        "fechaInsercion", "distanciaLimite", "tiempoLimite", "activo", "mesesLimite", "otros", "idPasoTaller",
     ]
 
 
