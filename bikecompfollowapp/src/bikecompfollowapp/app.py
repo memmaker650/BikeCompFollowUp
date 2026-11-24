@@ -240,6 +240,23 @@ SUBPANTALLAS_MANTENIMIENTO = {
 }
 
 
+# Botones de las subpantallas que son el mismo componente que uno de la pantalla principal de Mantenimiento.
+# Elegir cualquiera de los dos marca los dos (y el componente se guarda una sola vez, con el nombre de la principal).
+EQUIVALENTES_MANTENIMIENTO = {
+    "pieza.cadena": "taller.cadena",
+    "pieza.pastillas": "taller.pastillas",
+    "pieza.cubierta": "taller.cubiertas",
+    "pieza.cinta": "taller.cinta",
+    "pieza.disco": "taller.disco",
+    "pieza.liquido": "taller.tubeless",
+}
+
+
+def componente_mantenimiento(boton):
+    """Clave con la que un botón de las cuadrículas de Mantenimiento entra en la pila de componentes cambiados."""
+    return EQUIVALENTES_MANTENIMIENTO.get(boton, boton)
+
+
 class AppPaths:
     app = None
 
@@ -692,7 +709,8 @@ class BikeCompFollowApp(toga.App):
             for i, boton in enumerate(textos):
                 if i:
                     fila.add(toga.Box(style=Pack(width=ESPACIO)))
-                elegido = boton in self.componentes_cambiados and (clave, boton) not in SUBPANTALLAS_MANTENIMIENTO
+                elegido = (componente_mantenimiento(boton) in self.componentes_cambiados
+                           and (clave, boton) not in SUBPANTALLAS_MANTENIMIENTO)
                 estilo = dict(estilo_boton)
                 if elegido:
                     estilo.update(background_color=COLOR_SELECCIONADO, color="#FFFFFF")
@@ -892,11 +910,12 @@ class BikeCompFollowApp(toga.App):
         if destino:
             self.ir_a_mantenimiento(destino)
             return
-        if boton in self.componentes_cambiados:
-            self.componentes_cambiados.remove(boton)
-            self.detalles_cambiados.pop(boton, None)
+        componente = componente_mantenimiento(boton)     # CADENA de 'Otros' es la misma Cadena de la principal
+        if componente in self.componentes_cambiados:
+            self.componentes_cambiados.remove(componente)
+            self.detalles_cambiados.pop(componente, None)
         else:
-            self.componentes_cambiados.append(boton)
+            self.componentes_cambiados.append(componente)
         self.clave_cuadricula = clave
         self.ir_a_mantenimiento(clave)
 

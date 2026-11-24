@@ -1562,3 +1562,62 @@ def test_sin_pasos_no_hay_gastos(en_menu):
     pulsar(en_menu, "Estadísticas")
     pantalla = pulsar(en_menu, "Histórico Taller")
     assert "Gastos de taller (€)" not in textos_labels(pantalla)
+
+
+# ---- Los elegidos siguen marcados al pasar a 'Otros' (mismo componente en varias cuadrículas) ----
+
+def marcados(pantalla):
+    from toga.colors import Color
+    elegido = Color.parse(modulo_app.COLOR_SELECCIONADO)
+    return [b.text for b in botones_cuadricula(pantalla) if b.style.background_color == elegido]
+
+
+def test_al_pulsar_otros_siguen_marcados_los_elegidos(cuadricula):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Pastillas freno")
+    pulsar(cuadricula, "Cubiertas")
+    pulsar(cuadricula, "Cinta Manillar")
+    pulsar(cuadricula, "Disco Freno")
+    pantalla = pulsar(cuadricula, "Otros")
+    assert marcados(pantalla) == ["CADENA", "PASTILLA/S FRENO", "CUBIERTA", "CINTA MANILLAR", "DISCO/s FRENO"]
+
+
+def test_lo_elegido_en_otros_se_ve_marcado_al_volver(cuadricula):
+    pulsar(cuadricula, "Otros")
+    pulsar(cuadricula, "CADENA")
+    pulsar(cuadricula, "HORQUILLA")
+    pantalla = pulsar(cuadricula, "◀ Volver")
+    assert marcados(pantalla) == ["Cadena"]
+    assert cuadricula.componentes_cambiados == ["taller.cadena", "pieza.horquilla"]
+
+
+def test_el_mismo_componente_no_se_duplica(cuadricula, db):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Otros")
+    pantalla = pulsar(cuadricula, "CADENA")       # ya estaba: se desmarca, no se añade otra cadena
+    assert cuadricula.componentes_cambiados == []
+    assert marcados(pantalla) == []
+    pulsar(cuadricula, "CADENA")
+    pulsar(cuadricula, "Confirmar Cambios")
+    assert db.execute("SELECT elemento FROM archivoscomponentes WHERE idPasoTaller IS NOT NULL").fetchall() == [
+        ("cadena",)]
+
+
+def test_liquido_tubeless_es_el_mismo_en_la_subpantalla(cuadricula):
+    pulsar(cuadricula, "Líquido Tubeless")
+    pulsar(cuadricula, "Otros")
+    pantalla = pulsar(cuadricula, "TUBELESS")
+    assert marcados(pantalla) == ["LIQUIDO"]
+
+
+def test_varios_de_varias_cuadriculas_se_guardan_todos(cuadricula, db):
+    pulsar(cuadricula, "Cadena")
+    pulsar(cuadricula, "Otros")
+    pulsar(cuadricula, "HORQUILLA")
+    pulsar(cuadricula, "Otros")
+    pantalla = pulsar(cuadricula, "PEDALIER")
+    assert marcados(pantalla) == ["PEDALIER"]
+    assert "Cambiados: Cadena, HORQUILLA, PEDALIER" in textos_labels(pantalla)
+    pulsar(cuadricula, "Confirmar Cambios")
+    assert [f[0] for f in db.execute("SELECT elemento FROM archivoscomponentes WHERE idPasoTaller IS NOT NULL "
+                                     "ORDER BY id")] == ["cadena", "HORQUILLA", "PEDALIER"]
