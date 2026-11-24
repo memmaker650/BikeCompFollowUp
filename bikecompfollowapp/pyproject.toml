@@ -37,6 +37,7 @@ requires = [
 test_requires = [
     "pytest",
     "pytest-html",
+    "toga-dummy~=0.5.0",
 ]
 
 [tool.briefcase.app.bikecompfollowapp.macOS]

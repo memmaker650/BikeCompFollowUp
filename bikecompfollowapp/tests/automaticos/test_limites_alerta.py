@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 
 def _preparar_limite(app, campo, tipo="Precio Superior", valor="5000", componente="Cambio Trasero"):
     app.tipo_limite = campo(tipo)
@@ -11,7 +13,7 @@ def _preparar_limite(app, campo, tipo="Precio Superior", valor="5000", component
 
 def test_guardar_limite_superior(app, db, campo):
     _preparar_limite(app, campo)
-    app.cargar_limiteAlerta()
+    assert app.cargar_limiteAlerta() is True
 
     assert db.execute("SELECT componente, tipo_limite, valor FROM LimitesAlerta").fetchall() == [
         ("Cambio Trasero", "superior", 5000)
@@ -37,10 +39,22 @@ def test_limite_duplicado_no_se_inserta_dos_veces(app, db, campo):
 
 def test_limite_sin_tipo_marca_error(app, db, campo):
     _preparar_limite(app, campo, tipo=None)
-    app.cargar_limiteAlerta()
+    assert app.cargar_limiteAlerta() is False
 
     assert db.execute("SELECT COUNT(*) FROM LimitesAlerta").fetchone()[0] == 0
     assert app.label_estado == "❌"
+
+
+@pytest.mark.parametrize("tipo, esperado", [
+    ("Precio Superior", "superior"),
+    ("Precio Inferior", "inferior"),
+    ("superior", "superior"),   # valores leídos de LimitesAlerta en el desplegable
+    ("inferior", "inferior"),
+])
+def test_tipo_de_limite_se_normaliza(app, db, campo, tipo, esperado):
+    _preparar_limite(app, campo, tipo=tipo)
+    app.cargar_limiteAlerta()
+    assert db.execute("SELECT tipo_limite FROM LimitesAlerta").fetchone() == (esperado,)
 
 
 def test_seleccionar_limites_componente(app, campo):
@@ -51,17 +65,17 @@ def test_seleccionar_limites_componente(app, campo):
     _preparar_limite(app, campo, componente="Plato", valor="20000")
     app.cargar_limiteAlerta()
 
-    limites = app.seleccionarLimitesComponente("Cambio Trasero")
+    limites = app.db.seleccionarLimitesComponente("Cambio Trasero")
     assert sorted(limites) == [("Cambio Trasero", "inferior", 1000), ("Cambio Trasero", "superior", 5000)]
 
 
 def test_seleccionar_limites_componente_sin_datos(app):
-    assert app.seleccionarLimitesComponente("No existe") == []
+    assert app.db.seleccionarLimitesComponente("No existe") == []
 
 
 def test_seleccionar_limites_sin_tabla_devuelve_lista_vacia(app):
     app.sqliteConnection.execute("DROP TABLE LimitesAlerta")
-    assert app.seleccionarLimitesComponente("Cambio Trasero") == []
+    assert app.db.seleccionarLimitesComponente("Cambio Trasero") == []
 
 
 def test_tipos_alerta_se_leen_de_limites_alerta(app, campo):
